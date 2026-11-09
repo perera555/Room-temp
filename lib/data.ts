@@ -10,9 +10,11 @@ import type {
   RoomSeries,
   SourceState,
   UnitData,
+  UtilitiesState,
+  UtilityEntry,
 } from "./types";
 import { UNITS, airbnbRoomsFor, airbnbUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
-import { loadGasChanges, loadReadings, storeEnabled } from "./store";
+import { loadGasChanges, loadReadings, loadUtilityEntries, storeEnabled } from "./store";
 
 const HOUR = 3_600_000;
 /** Sri Lanka is UTC+5:30 — used only to shape the sample (demo) data. */
@@ -537,30 +539,78 @@ async function liveBookings(spec: string): Promise<Booking[]> {
 /* ------------------------------------------------------------------ */
 /* LPG gas cylinder (12.5 kg)                                          */
 /* ------------------------------------------------------------------ */
-function gasFrom(changes: number[], source: GasState["source"], canRecord: boolean): GasState {
+function gasFrom(unit: { id: string; name: string }, changes: number[], source: GasState["source"], canRecord: boolean): GasState {
   const sizeKg = Number(process.env.GAS_CYLINDER_KG ?? 12.5);
   const fallbackDays = Number(process.env.GAS_CYLINDER_DAYS ?? 90); // about 3 months per cylinder
   const gaps = changes.slice(1).map((t, i) => (t - changes[i]) / DAY).filter((d) => d >= 7 && d <= 365);
   const recent = gaps.slice(-5);
   const learned = recent.length > 0;
   const typicalDays = learned ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length) : fallbackDays;
-  return { source, canRecord, sizeKg, changes, typicalDays, learned };
+  return { unit: unit.id, unitName: unit.name, source, canRecord, sizeKg, changes, typicalDays, learned };
 }
 
-async function getGas(now: number): Promise<GasState> {
+/** Units that cook with an LPG cylinder (any unit with a kitchen). */
+const gasUnits = () => UNITS.filter((u) => u.rooms.some((r) => /kitchen/i.test(r)));
+
+async function getGas(now: number): Promise<GasState[]> {
+  const units = gasUnits();
   const canRecord = storeEnabled();
+  let stored: Record<string, number[]> = {};
   if (canRecord) {
     try {
-      const changes = await loadGasChanges();
-      if (changes.length) return gasFrom(changes, "live", true);
+      stored = await loadGasChanges(units.map((u) => u.id));
     } catch (err) {
       console.error("[dashboard] gas history failed:", err);
     }
   }
-  const last = process.env.GAS_LAST_CHANGED ? Date.parse(process.env.GAS_LAST_CHANGED) : NaN;
-  if (Number.isFinite(last)) return gasFrom([last], "settings", canRecord);
-  // sample history: cylinders lasting ~3 months, current one fitted 41 days ago
-  return gasFrom([now - 222 * DAY, now - 132 * DAY, now - 41 * DAY], "demo", canRecord);
+  return units.map((u, i) => {
+    if (stored[u.id]?.length) return gasFrom(u, stored[u.id], "live", true);
+    // e.g. GAS_LAST_CHANGED_UNIT2=2026-11-02 (or GAS_LAST_CHANGED for all)
+    const raw = process.env[`GAS_LAST_CHANGED_${u.id.toUpperCase()}`] ?? process.env.GAS_LAST_CHANGED;
+    const last = raw ? Date.parse(raw) : NaN;
+    if (Number.isFinite(last)) return gasFrom(u, [last], "settings", canRecord);
+    // sample history: cylinders lasting ~3 months, each unit at a different point
+    const ago = [41, 77, 12, 63][i % 4];
+    return gasFrom(u, [now - (ago + 181) * DAY, now - (ago + 90) * DAY, now - ago * DAY], "demo", canRecord);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Utility records (electricity / water / gas) per unit                */
+/* ------------------------------------------------------------------ */
+const OWNER = (u: { owner: string | null; usage: string | null }) => u.owner ?? u.usage ?? "";
+function demoUtilities(now: number): UtilityEntry[] {
+  const out: UtilityEntry[] = [];
+  const first = new Date(now);
+  // last 3 full months
+  for (let m = 1; m <= 3; m++) {
+    const from = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() - m, 1));
+    const to = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() - m + 1, 0));
+    const f = from.toISOString().slice(0, 10);
+    const t = to.toISOString().slice(0, 10);
+    UNITS.forEach((u, ui) => {
+      const busy = u.id === "unit5" ? 1.6 : u.id === "unit1" ? 1.3 : 1;
+      const kwh = Math.round((150 + hash(ui * 10 + m) * 90) * busy);
+      out.push({ id: `demo-e-${u.id}-${m}`, unit: u.id, kind: "electricity", from: f, to: t, amount: kwh, cost: Math.round(kwh * 42 + 400), customer: OWNER(u), account: "", note: "Sample CEB bill" });
+      const water = Math.round((12 + hash(ui * 20 + m) * 10) * (u.id === "unit5" ? 0.5 : 1));
+      out.push({ id: `demo-w-${u.id}-${m}`, unit: u.id, kind: "water", from: f, to: t, amount: water, cost: Math.round(water * 95 + 300), customer: OWNER(u), account: "", note: "Sample water bill" });
+    });
+  }
+  out.push({ id: "demo-g-unit3", unit: "unit3", kind: "gas", from: "2026-08-01", to: "2026-10-29", amount: 12.5, cost: 4250, customer: "Sasika Sasnka", account: "", note: "Sample: Litro 12.5 kg" });
+  return out.sort((a, b) => b.to.localeCompare(a.to));
+}
+
+async function getUtilities(now: number): Promise<UtilitiesState> {
+  const canRecord = storeEnabled();
+  if (canRecord) {
+    try {
+      const entries = await loadUtilityEntries<UtilityEntry>();
+      if (entries.length) return { source: "live", canRecord, entries: entries.sort((a, b) => b.to.localeCompare(a.to)) };
+    } catch (err) {
+      console.error("[dashboard] utilities failed:", err);
+    }
+  }
+  return { source: "demo", canRecord, entries: demoUtilities(now) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -604,12 +654,13 @@ export async function getDashboardData(): Promise<DashboardData> {
       withFallback("calendar", env.CALENDAR_ICAL_URLS ? () => liveBookings(env.CALENDAR_ICAL_URLS!) : null, () => demoBookings(now)),
     ]);
 
-  const gas = await getGas(now);
+  const [gas, utilities] = await Promise.all([getGas(now), getUtilities(now)]);
 
   return {
     generatedAt: new Date(now).toISOString(),
     location: env.LOCATION_NAME ?? "Sri Lanka",
     gas,
+    utilities,
     sources: {
       rooms: roomsSrc,
       outside: outsideSrc,

@@ -22,7 +22,7 @@ import {
   findOverbookings,
   guestStatus,
 } from "./Units";
-import { UtilitiesPanel, gasSummary } from "./Utilities";
+import { EnergyRecords, UtilitiesPanel, lowestGas } from "./Utilities";
 import { WallView } from "./WallView";
 
 const OUTSIDE = "#9085e9";
@@ -221,6 +221,13 @@ export function Dashboard() {
           >
             Wall view
           </button>
+          <a
+            href="/report"
+            className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white"
+            title="Print or save every record as PDF"
+          >
+            🖨 <span className="hidden sm:inline">Print report</span>
+          </a>
           <button
             onClick={load}
             disabled={loading}
@@ -302,7 +309,14 @@ function Body({
   const { next } = guestStatus(data.bookings, null, todayKey);
   const daysUntil = next ? Math.round((new Date(next.start + "T00:00:00").getTime() - new Date(todayKey + "T00:00:00").getTime()) / 86_400_000) : null;
   const showBookings = unit ? unit.airbnbRooms.length > 0 : airbnbRooms.length > 0;
-  const gas = gasSummary(data.gas, now.getTime());
+  // gas tile: this unit's cylinder, or the emptiest one across units
+  const gasPick = unit
+    ? (() => {
+        const g = data.gas.find((x) => x.unit === unit.id);
+        return g ? lowestGas([g], now.getTime()) : undefined;
+      })()
+    : lowestGas(data.gas, now.getTime());
+  const gas = gasPick?.s ?? { pct: 0, daysLeft: 0, emptyAt: now.getTime(), level: "ok" as const };
   const showEnergy = data.sources.energy === "live";
   const showWeight = data.sources.weight === "live";
 
@@ -327,7 +341,7 @@ function Body({
           sub={`${describe(f.current.code)} · Wind ${Math.round(f.current.wind)} ${f.windUnit} ${compass(f.current.dir)} · Gusts ${Math.round(f.current.gust)}`}
         />
         <Tile
-          label={`Gas cylinder · ${data.gas.sizeKg} kg`}
+          label={`Gas · lowest: ${gasPick?.g.unitName ?? "—"}`}
           value={`${gas.pct}% left`}
           accent={gas.level === "critical" ? "#d03b3b" : gas.level === "low" ? "#fab219" : "linear-gradient(90deg,#f97316,#f59e0b)"}
           sub={`≈ ${gas.daysLeft} days left · empty around ${new Date(gas.emptyAt).toLocaleDateString([], { day: "numeric", month: "short" })}${
@@ -387,7 +401,7 @@ function Body({
         </Panel>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <UtilitiesPanel gas={data.gas} now={now.getTime()} onChanged={onReload} />
+          <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} now={now.getTime()} onChanged={onReload} />
 
           <Panel
             title="Humidity"
@@ -499,6 +513,8 @@ function Body({
       )}
 
       {!unit && <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />}
+
+      <EnergyRecords key={unit?.id ?? "all"} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} location={data.location} onChanged={onReload} />
     </>
   );
 }

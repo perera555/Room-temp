@@ -639,14 +639,16 @@ export function Occupancy({
                     <div
                       key={b.id}
                       title={`${b.guest} · ${fmtRange(b)} · ${nights(b)} nights${clash ? " · ⚠ OVERBOOKED" : ""}`}
-                      className={`z-[1] truncate rounded-lg px-2 text-xs font-semibold shadow ${clash ? "self-start py-0.5" : "my-1.5 py-1"} ${
+                      className={`z-[1] truncate rounded-md px-2 font-semibold shadow ${
+                        clash === 1 ? "mt-1 self-start py-0 text-[10px] leading-4" : clash === 2 ? "mb-1 self-end py-0 text-[10px] leading-4" : "my-1.5 py-1 text-xs"
+                      } ${
                         clash
                           ? "bg-gradient-to-r from-red-500 to-red-600 text-white ring-2 ring-red-300"
                           : current
                             ? "bg-gradient-to-r from-emerald-300 to-emerald-400 text-emerald-950"
                             : "bg-gradient-to-r from-emerald-600 to-emerald-500 text-white"
                       }`}
-                      style={{ gridRow: 1, gridColumn: `${s + 2} / ${e + 2}`, marginTop: clash === 2 ? 16 : clash === 1 ? 2 : undefined }}
+                      style={{ gridRow: 1, gridColumn: `${s + 2} / ${e + 2}` }}
                     >
                       {clash ? "⚠ " : ""}
                       {b.guest}

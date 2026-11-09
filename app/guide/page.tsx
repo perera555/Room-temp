@@ -65,7 +65,8 @@ export default function GuidePage() {
           ["install", "Install the app"],
           ["calendar", "Guest calendar"],
           ["sensors", "Room sensors"],
-          ["energy", "Gas & utilities"],
+          ["energy", "Energy & printing"],
+          ["overbooking", "Overbooking"],
           ["password", "Password"],
           ["faq", "FAQ"],
         ].map(([id, label]) => (
@@ -216,12 +217,37 @@ Content-Type: application/json
           <li>The button needs the free Upstash database (step 4). Without it, set <code>GAS_LAST_CHANGED</code> (e.g. <code>2026-11-02</code>) in Vercel instead.</li>
         </ul>
         <p>
-          <b>Electricity (CEB/LECO) and water</b> are shown as “coming soon” and can be connected later, for example with a smart
-          energy monitor, or by entering meter readings.
+          <b>Energy records (per unit):</b> open <b>Detailed view</b> → <b>Energy</b> panel or the <b>Energy records</b> list →
+          <b>+ Add record</b>. Choose Electricity, Water or Gas, the <b>unit</b>, the <b>From</b> and <b>To</b> dates, how much was used
+          (kWh, water units, or kg), the <b>cost in LKR</b>, the <b>customer</b> name and the bill <b>account no.</b> The app works out
+          days and usage per day. Filter the list by unit or type, and delete wrong entries with 🗑.
+        </p>
+        <p>
+          <b>Print / PDF:</b> the <b>🖨 Print report</b> button (top of the dashboard) opens a full report of everything: units and
+          owners, room temperatures, all guest bookings with check-in and check-out times, gas cylinders, energy records with totals,
+          and the weather. Press <b>Print</b>, or <b>Save as PDF</b> and choose “Save as PDF” as the printer. The Energy records list
+          also has its own <b>🖨 Print</b> and <b>⬇ Excel (CSV)</b> buttons for just the filtered records.
+        </p>
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm">
+          Saving records, gas changes and sensor readings needs the free <b>Upstash Redis</b> database connected in Vercel (step 4).
+          Until then the panels show sample data.
         </p>
       </Section>
 
-      <Section id="password" n={6} title="Password protection (recommended)">
+      <Section id="overbooking" n={6} title="Avoiding overbooking">
+        <p>
+          The dashboard checks every booking. If two bookings overlap for the same bedroom, a red <b>⚠ OVERBOOKING</b> bar appears with
+          both guests and the dates, and the clash turns red in the occupancy chart. Cancel or move one of them.
+        </p>
+        <p>
+          <b>To stop it happening:</b> keep every calendar in sync both ways. In Airbnb → Calendar → Availability →{" "}
+          <b>Import calendar</b>, add your Google Calendar’s iCal link, so dates you book elsewhere are blocked on Airbnb. In Google
+          Calendar add the Airbnb link (Other calendars → From URL). Note that Airbnb refreshes imported calendars every few hours,
+          so block last-minute bookings by hand.
+        </p>
+      </Section>
+
+      <Section id="password" n={7} title="Password protection (recommended)">
         <p>
           No admin account is needed. To keep guest names private, add <code>DASHBOARD_PASSWORD</code> in Vercel. Each device asks
           for the password once and stays signed in for a year. Remove the variable to turn the lock off.
@@ -249,7 +275,7 @@ Content-Type: application/json
         />
       </section>
 
-      <Section id="faq" n={7} title="FAQ">
+      <Section id="faq" n={8} title="FAQ">
         <ul>
           <li><b>Do I need an admin account?</b> No. Only your Vercel login to change settings. Optional password for viewers.</li>
           <li><b>Does it cost anything?</b> The app itself is free: Vercel’s free Hobby plan, Open-Meteo weather and Upstash’s free plan are enough. You only pay for sensors.</li>

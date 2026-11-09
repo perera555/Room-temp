@@ -62,6 +62,8 @@ export type Forecast = {
 };
 
 export type GasState = {
+  unit: string; // unit id
+  unitName: string;
   source: "live" | "settings" | "demo";
   canRecord: boolean; // true when the app can save button presses
   sizeKg: number;
@@ -70,10 +72,33 @@ export type GasState = {
   learned: boolean; // typicalDays came from real history
 };
 
+export type UtilityKind = "electricity" | "water" | "gas";
+
+/** One utility reading / bill: usage between two dates. */
+export type UtilityEntry = {
+  id: string;
+  unit: string; // unit id, e.g. "unit3"
+  kind: UtilityKind;
+  from: string; // YYYY-MM-DD
+  to: string; // YYYY-MM-DD
+  amount: number; // kWh (electricity), units m³ (water), kg (gas)
+  cost: number | null; // LKR
+  customer: string; // customer / tenant name the bill is for
+  account: string; // bill account number (CEB / LECO / water board)
+  note: string;
+};
+
+export type UtilitiesState = {
+  source: "live" | "demo";
+  canRecord: boolean;
+  entries: UtilityEntry[]; // newest first
+};
+
 export type DashboardData = {
+  utilities: UtilitiesState;
   generatedAt: string;
   location: string;
-  gas: GasState;
+  gas: GasState[]; // one per unit with a kitchen
   sources: {
     rooms: SourceState;
     outside: SourceState;

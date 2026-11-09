@@ -6,7 +6,7 @@ import type { DashboardData, Point, UnitData } from "@/lib/types";
 import { LineChart, Legend, type LineSeries } from "./charts";
 import { shortRoom } from "./BookingCalendar";
 import { WeatherIcon, describe, compass } from "./Weather";
-import { gasSummary } from "./Utilities";
+import { daysIn, gasSummary, lowestGas } from "./Utilities";
 import {
   DAMP,
   Occupancy,
@@ -140,7 +140,8 @@ export function WallView({
 }) {
   const todayKey = dayKey(now);
   const f = data.forecast;
-  const gas = gasSummary(data.gas, now.getTime());
+  const low = lowestGas(data.gas, now.getTime());
+  const gas = low?.s ?? { pct: 0, daysLeft: 0, level: "ok" as const };
   const rooms = airbnbRoomList(data.units);
   const booked = rooms.filter(({ unit, room }) => guestStatus(data.bookings, unit.id, todayKey, room).staying).length;
 
@@ -153,7 +154,7 @@ export function WallView({
   ].filter((s) => s.points.length);
   const allTemps = data.units.flatMap((u) => u.rooms.map((r) => r.temp.at(-1)?.v)).filter((v): v is number => v != null);
   const indoor = allTemps.length ? allTemps.reduce((a, b) => a + b, 0) / allTemps.length : null;
-  const anyDemo = Object.values(data.sources).includes("demo") || data.gas.source === "demo";
+  const anyDemo = Object.values(data.sources).includes("demo") || data.gas.some((g) => g.source === "demo") || data.utilities.source === "demo";
   const fit = useFitScale();
   const conflicts = findOverbookings(data.bookings, todayKey);
 
@@ -184,7 +185,7 @@ export function WallView({
             accent={OUTSIDE}
           />
           <Pill
-            label={`Gas · ${data.gas.sizeKg} kg`}
+            label={`Gas · lowest ${low?.g.unitName ?? ""}`}
             value={`${gas.pct}%`}
             sub={`≈ ${gas.daysLeft} days left${gas.level !== "ok" ? " · order!" : ""}`}
             accent={gas.level === "critical" ? "#d03b3b" : gas.level === "low" ? "#fab219" : "#f97316"}
@@ -208,9 +209,12 @@ export function WallView({
               <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
             </svg>
           </button>
-          <button onClick={onDetailed} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Scrolling view with every detail and unit pages">
+          <button onClick={onDetailed} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Scrolling view with every detail, unit pages and energy records">
             Detailed view
           </button>
+          <a href="/report" className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Print or save every record as PDF">
+            🖨 Report
+          </a>
           <Link href="/guide" aria-label="User guide" className="grid h-9 w-9 place-items-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--ink-2)] hover:text-white">
             ?
           </Link>
@@ -290,34 +294,40 @@ export function WallView({
 
         {/* C: gas + occupancy + arrivals */}
         <div className="flex min-h-0 min-w-0 flex-col gap-3">
-          <Card title="Utilities" className="shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-sm font-semibold text-[var(--ink-1)]">Gas cylinder · {data.gas.sizeKg} kg</span>
-                  <span className="text-xl font-semibold tabular-nums text-[var(--ink-1)]">{gas.pct}%</span>
-                </div>
-                <div className="mt-1 h-3 overflow-hidden rounded-full bg-white/10 shadow-inner">
-                  <div
-                    className="h-full rounded-full"
-                    style={{
-                      width: `${gas.pct}%`,
-                      background: gas.level === "critical" ? "#d03b3b" : gas.level === "low" ? "#fab219" : "linear-gradient(90deg,#16a34a,#22c55e)",
-                    }}
-                  />
-                </div>
-                <div className="mt-1 flex justify-between text-[11px] text-[var(--ink-2)]">
-                  <span>Fitted {new Date(gas.last).toLocaleDateString([], { day: "numeric", month: "short" })} · {gas.days}d ago</span>
-                  <span>
-                    Empty ≈ <b className="text-[var(--ink-1)]">{new Date(gas.emptyAt).toLocaleDateString([], { day: "numeric", month: "short" })}</b>
-                  </span>
-                </div>
-                {gas.level !== "ok" && <div className="mt-1 text-xs font-semibold text-amber-300">⚠ Order a new cylinder</div>}
-              </div>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-              <div className="rounded-lg border border-dashed border-white/10 px-2 py-1 text-[var(--ink-3)]">⚡ Electricity · coming soon</div>
-              <div className="rounded-lg border border-dashed border-white/10 px-2 py-1 text-[var(--ink-3)]">💧 Water · coming soon</div>
+          <Card title="Energy per unit" className="shrink-0" right={<span>🔥 gas · ⚡/day · 💧/day</span>}>
+            <div className="space-y-1">
+              {data.units.map((u) => {
+                const g = data.gas.find((x) => x.unit === u.id);
+                const s = g ? gasSummary(g, now.getTime()) : null;
+                const el = data.utilities.entries.find((e) => e.unit === u.id && e.kind === "electricity");
+                const wa = data.utilities.entries.find((e) => e.unit === u.id && e.kind === "water");
+                return (
+                  <div key={u.id} className="grid grid-cols-[44px_1fr_56px_56px] items-center gap-2 text-[11px]">
+                    <b className="text-[var(--ink-1)]">{u.name.replace("Unit ", "U")}</b>
+                    {s ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full rounded-full"
+                            style={{ width: `${s.pct}%`, background: s.level === "critical" ? "#d03b3b" : s.level === "low" ? "#fab219" : "#22c55e" }}
+                          />
+                        </div>
+                        <span className={`w-12 shrink-0 text-right tabular-nums ${s.level !== "ok" ? "font-semibold text-amber-300" : "text-[var(--ink-2)]"}`}>
+                          {s.pct}% {s.daysLeft}d
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[var(--ink-3)]">no gas</span>
+                    )}
+                    <span className="text-right tabular-nums text-[var(--ink-2)]" title="Electricity kWh per day (latest record)">
+                      ⚡{el ? (el.amount / daysIn(el)).toFixed(1) : "–"}
+                    </span>
+                    <span className="text-right tabular-nums text-[var(--ink-2)]" title="Water units per day (latest record)">
+                      💧{wa ? (wa.amount / daysIn(wa)).toFixed(1) : "–"}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </Card>
 

@@ -43,23 +43,54 @@ export async function saveReadings(rows: { unit: string; room: string; r: Stored
   await pipeline(cmds);
 }
 
-/* ---------------- Gas cylinder changes ---------------- */
-const GAS_KEY = "rt:gas:changes";
+/* ---------------- Utility entries (electricity / water / gas) ---------------- */
+const UTIL_KEY = "rt:util:entries";
 
-export async function loadGasChanges(): Promise<number[]> {
-  const [res] = await pipeline([["LRANGE", GAS_KEY, 0, -1]]);
-  return ((res?.result as string[]) ?? []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+export async function loadUtilityEntries<T>(): Promise<T[]> {
+  const [res] = await pipeline([["LRANGE", UTIL_KEY, 0, -1]]);
+  return ((res?.result as string[]) ?? []).map((s) => JSON.parse(s) as T);
 }
 
-export async function addGasChange(t: number) {
+export async function addUtilityEntry(entry: object) {
   await pipeline([
-    ["RPUSH", GAS_KEY, String(t)],
-    ["LTRIM", GAS_KEY, -24, -1], // keep the last 24 cylinders
+    ["LPUSH", UTIL_KEY, JSON.stringify(entry)],
+    ["LTRIM", UTIL_KEY, 0, 499],
   ]);
 }
 
-export async function removeLastGasChange() {
-  await pipeline([["RPOP", GAS_KEY]]);
+export async function deleteUtilityEntry(id: string) {
+  const [res] = await pipeline([["LRANGE", UTIL_KEY, 0, -1]]);
+  const match = ((res?.result as string[]) ?? []).find((s) => {
+    try {
+      return JSON.parse(s).id === id;
+    } catch {
+      return false;
+    }
+  });
+  if (match) await pipeline([["LREM", UTIL_KEY, 1, match]]);
+  return Boolean(match);
+}
+
+/* ---------------- Gas cylinder changes ---------------- */
+const gasKey = (unit: string) => `rt:gas:changes:${unit}`;
+
+/** Cylinder-change timestamps for several units at once, oldest first. */
+export async function loadGasChanges(units: string[]): Promise<Record<string, number[]>> {
+  const res = await pipeline(units.map((u) => ["LRANGE", gasKey(u), 0, -1]));
+  return Object.fromEntries(
+    units.map((u, i) => [u, ((res[i]?.result as string[]) ?? []).map(Number).filter(Number.isFinite).sort((a, b) => a - b)]),
+  );
+}
+
+export async function addGasChange(unit: string, t: number) {
+  await pipeline([
+    ["RPUSH", gasKey(unit), String(t)],
+    ["LTRIM", gasKey(unit), -24, -1], // keep the last 24 cylinders
+  ]);
+}
+
+export async function removeLastGasChange(unit: string) {
+  await pipeline([["RPOP", gasKey(unit)]]);
 }
 
 export async function loadReadings(since: number) {
