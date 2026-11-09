@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Room Temp: home dashboard
 
-## Getting Started
+An installable web app (PWA) for a wall screen, phone or computer. It shows:
 
-First, run the development server:
+- **Room temperatures & humidity** for the last 24 hours
+- **Outside weather**: live temperature, a 7-day forecast, and wind speed, gusts and direction (Open-Meteo, free, no key)
+- **Energy use**: 30 days of daily totals plus the most recent 24 hours, half-hourly, with £ cost (Octopus Energy API)
+- **Weight** history
+- **Airbnb guest bookings** from Google Calendar and/or Airbnb iCal links
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+Any source that is not connected yet shows **sample data** and a yellow "Sample data" badge.
+
+The full user guide is inside the app at **`/guide`**.
+
+## How it works
+
+```
+Browser / installed app ──every 5 min──▶ /api/dashboard (Vercel)
+                                            ├─ Open-Meteo        → outside weather + forecast + wind
+                                            ├─ Google/Airbnb iCal → guest bookings
+                                            ├─ SENSOR_FEED_URL   → room temperatures
+                                            ├─ Octopus API       → electricity & gas
+                                            └─ WEIGHT_FEED_URL   → weight
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+There is no database and no admin account. All settings are environment variables (see `.env.example`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Run locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+cp .env.example .env.local   # fill in what you have
+npm run dev                  # http://localhost:3000
+```
 
-## Learn More
+## Deploy
 
-To learn more about Next.js, take a look at the following resources:
+The project is linked to Vercel. Every push to GitHub `main` redeploys automatically.
+Add settings in **Vercel → Project → Settings → Environment Variables**, then **Redeploy**.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Install as an app
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **Windows / Mac / Android (Chrome, Edge):** click **Install app** in the dashboard header
+- **iPhone / iPad:** Safari → Share → **Add to Home Screen**
+- **Mac Safari:** File → **Add to Dock**
+- **Raspberry Pi wall display:** `chromium-browser --kiosk https://<your-app>.vercel.app`
