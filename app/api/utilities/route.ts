@@ -1,4 +1,4 @@
-import { addUtilityEntry, deleteUtilityEntry, storeEnabled } from "@/lib/store";
+import { addUtilityEntry, deleteUtilityEntry, setService, storeEnabled } from "@/lib/store";
 import type { UtilityEntry, UtilityKind } from "@/lib/types";
 import { UNITS } from "@/lib/units";
 
@@ -45,6 +45,7 @@ export async function POST(req: Request) {
     note: String(b.note ?? "").trim().slice(0, 120),
   };
   await addUtilityEntry(entry);
+  await setService(unit, kind, true); // a record means the unit uses this service
   return Response.json({ ok: true, entry });
 }
 

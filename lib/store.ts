@@ -71,6 +71,25 @@ export async function deleteUtilityEntry(id: string) {
   return Boolean(match);
 }
 
+/* ---------------- Services in use per unit ---------------- */
+const SERVICES_KEY = "rt:services";
+
+/** Stored overrides: { unit2: { gas: true }, … } (missing = default). */
+export async function loadServiceOverrides(): Promise<Record<string, Record<string, boolean>>> {
+  const [res] = await pipeline([["GET", SERVICES_KEY]]);
+  try {
+    return res?.result ? JSON.parse(res.result as string) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function setService(unit: string, kind: string, on: boolean) {
+  const all = await loadServiceOverrides();
+  all[unit] = { ...(all[unit] ?? {}), [kind]: on };
+  await pipeline([["SET", SERVICES_KEY, JSON.stringify(all)]]);
+}
+
 /* ---------------- Gas cylinder changes ---------------- */
 const gasKey = (unit: string) => `rt:gas:changes:${unit}`;
 

@@ -40,6 +40,18 @@ export function airbnbUnitIds(): string[] {
     .filter((v): v is string => Boolean(v));
 }
 
+/**
+ * Units that use an LPG gas cylinder. Default: Unit 1 only.
+ * Later, set GAS_UNITS="1,2,3,4" in Vercel to turn gas on for more units.
+ */
+export function gasUnitIds(): string[] {
+  const raw = process.env.GAS_UNITS ?? "1";
+  return raw
+    .split(",")
+    .map((s) => unitIdFrom(/^\s*\d+\s*$/.test(s) ? `unit ${s.trim()}` : s))
+    .filter((v): v is string => Boolean(v));
+}
+
 /** Rooms let individually on Airbnb: the bedrooms of each Airbnb unit. */
 export function airbnbRoomsFor(unitId: string): string[] {
   if (!airbnbUnitIds().includes(unitId)) return [];

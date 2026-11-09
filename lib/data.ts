@@ -10,11 +10,12 @@ import type {
   RoomSeries,
   SourceState,
   UnitData,
+  Services,
   UtilitiesState,
   UtilityEntry,
 } from "./types";
-import { UNITS, airbnbRoomsFor, airbnbUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
-import { loadGasChanges, loadReadings, loadUtilityEntries, storeEnabled } from "./store";
+import { UNITS, airbnbRoomsFor, airbnbUnitIds, gasUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
+import { loadGasChanges, loadReadings, loadServiceOverrides, loadUtilityEntries, storeEnabled } from "./store";
 
 const HOUR = 3_600_000;
 /** Sri Lanka is UTC+5:30 — used only to shape the sample (demo) data. */
@@ -548,20 +549,50 @@ function gasFrom(unit: { id: string; name: string }, changes: number[], source: 
   return { unit: unit.id, unitName: unit.name, source, canRecord, sizeKg, changes, typicalDays, learned };
 }
 
-/** Units that cook with an LPG cylinder (any unit with a kitchen). */
-const gasUnits = () => UNITS.filter((u) => u.rooms.some((r) => /kitchen/i.test(r)));
+/** Units that use an LPG cylinder (GAS_UNITS, default Unit 1 only). */
+const gasUnits = () => {
+  const ids = gasUnitIds();
+  return UNITS.filter((u) => ids.includes(u.id));
+};
 
-async function getGas(now: number): Promise<GasState[]> {
-  const units = gasUnits();
+/**
+ * Services in use per unit. Defaults: electricity + water for every unit,
+ * gas for GAS_UNITS (Unit 1). Switches saved in the app override these.
+ */
+async function getServices(): Promise<Services> {
+  let overrides: Record<string, Record<string, boolean>> = {};
+  if (storeEnabled()) {
+    try {
+      overrides = await loadServiceOverrides();
+    } catch (err) {
+      console.error("[dashboard] services failed:", err);
+    }
+  }
+  const gasIds = gasUnitIds();
+  return Object.fromEntries(
+    UNITS.map((u) => [
+      u.id,
+      {
+        electricity: overrides[u.id]?.electricity ?? true,
+        water: overrides[u.id]?.water ?? true,
+        gas: overrides[u.id]?.gas ?? gasIds.includes(u.id),
+      },
+    ]),
+  );
+}
+
+async function getGas(now: number, services: Services): Promise<GasState[]> {
   const canRecord = storeEnabled();
   let stored: Record<string, number[]> = {};
   if (canRecord) {
     try {
-      stored = await loadGasChanges(units.map((u) => u.id));
+      stored = await loadGasChanges(UNITS.map((u) => u.id));
     } catch (err) {
       console.error("[dashboard] gas history failed:", err);
     }
   }
+  // gas tracker for every unit whose gas service is in use
+  const units = UNITS.filter((u) => services[u.id]?.gas);
   return units.map((u, i) => {
     if (stored[u.id]?.length) return gasFrom(u, stored[u.id], "live", true);
     // e.g. GAS_LAST_CHANGED_UNIT2=2026-11-02 (or GAS_LAST_CHANGED for all)
@@ -595,7 +626,14 @@ function demoUtilities(now: number): UtilityEntry[] {
       out.push({ id: `demo-w-${u.id}-${m}`, unit: u.id, kind: "water", from: f, to: t, amount: water, cost: Math.round(water * 95 + 300), customer: OWNER(u), account: "", note: "Sample water bill" });
     });
   }
-  out.push({ id: "demo-g-unit3", unit: "unit3", kind: "gas", from: "2026-08-01", to: "2026-10-29", amount: 12.5, cost: 4250, customer: "Sasika Sasnka", account: "", note: "Sample: Litro 12.5 kg" });
+  // Sample gas history for each gas unit, matching the sample cylinder changes (each cylinder ≈ 3 months)
+  const isoAgo = (d: number) => new Date(now - d * DAY).toISOString().slice(0, 10);
+  gasUnits().forEach((u, i) => {
+    const ago = [41, 55, 12, 30][i % 4];
+    const owner = OWNER(u);
+    out.push({ id: `demo-g-${u.id}-1`, unit: u.id, kind: "gas", from: isoAgo(ago + 181), to: isoAgo(ago + 90), amount: 12.5, cost: 4100, customer: owner, account: "", note: "Sample: Litro 12.5 kg" });
+    out.push({ id: `demo-g-${u.id}-2`, unit: u.id, kind: "gas", from: isoAgo(ago + 90), to: isoAgo(ago), amount: 12.5, cost: 4250, customer: owner, account: "", note: "Sample: Litro 12.5 kg" });
+  });
   return out.sort((a, b) => b.to.localeCompare(a.to));
 }
 
@@ -653,13 +691,15 @@ export async function getDashboardData(): Promise<DashboardData> {
       withFallback("calendar", env.CALENDAR_ICAL_URLS ? () => liveBookings(env.CALENDAR_ICAL_URLS!) : null, () => demoBookings(now)),
     ]);
 
-  const [gas, utilities] = await Promise.all([getGas(now), getUtilities(now)]);
+  const services = await getServices();
+  const [gas, utilities] = await Promise.all([getGas(now, services), getUtilities(now)]);
 
   return {
     generatedAt: new Date(now).toISOString(),
     location: env.LOCATION_NAME ?? "Sri Lanka",
     gas,
     utilities,
+    services,
     sources: {
       rooms: roomsSrc,
       outside: outsideSrc,

@@ -88,6 +88,9 @@ export type UtilityEntry = {
   note: string;
 };
 
+/** Which services each unit uses: unitId → { electricity, water, gas } (true = in use). */
+export type Services = Record<string, Record<UtilityKind, boolean>>;
+
 export type UtilitiesState = {
   source: "live" | "demo";
   canRecord: boolean;
@@ -96,6 +99,7 @@ export type UtilitiesState = {
 
 export type DashboardData = {
   utilities: UtilitiesState;
+  services: Services;
   generatedAt: string;
   location: string;
   gas: GasState[]; // one per unit with a kitchen

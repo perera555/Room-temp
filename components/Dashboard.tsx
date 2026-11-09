@@ -24,6 +24,7 @@ import {
 } from "./Units";
 import { EnergyRecords, UtilitiesPanel, lowestGas } from "./Utilities";
 import { WallView } from "./WallView";
+import { flushOutbox, onOutboxChange, outboxCount } from "@/lib/outbox";
 
 const OUTSIDE = "#9085e9";
 const ELEC = "#3987e5";
@@ -32,6 +33,46 @@ const WEIGHT = "#d95926";
 const REFRESH_MS = 5 * 60_000;
 const VIEW_KEY = "rt:view";
 const LAYOUT_KEY = "rt:layout";
+const LAST_KEY = "rt:last-data"; // last good data, for offline use
+
+/** Status bar: offline, can't reach server, or changes waiting to sync. Renders nothing when all is fine. */
+function OfflineBar({
+  online,
+  error,
+  pending,
+  updated,
+  syncMsg,
+}: {
+  online: boolean;
+  error: string | null;
+  pending: number;
+  updated: string;
+  syncMsg: string | null;
+}) {
+  if (online && !error && !pending && !syncMsg) return null;
+  const offline = !online;
+  return (
+    <div
+      role="status"
+      className={`chip-3d flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border px-4 py-2 text-sm ${
+        offline || error ? "border-amber-400/50 bg-amber-500/15 text-amber-100" : "border-sky-400/40 bg-sky-500/10 text-sky-100"
+      }`}
+    >
+      {offline ? (
+        <b>📴 Offline: showing data from {updated}</b>
+      ) : error ? (
+        <b>⚠ Can’t reach the server: showing data from {updated}</b>
+      ) : null}
+      {(offline || error) && <span className="opacity-80">Live temperatures, weather and bookings update when the connection returns.</span>}
+      {pending > 0 && (
+        <span className="rounded-full bg-black/30 px-2.5 py-0.5 font-semibold">
+          ⏳ {pending} change{pending === 1 ? "" : "s"} saved on this device, will sync when online
+        </span>
+      )}
+      {syncMsg && <span className="font-semibold">{syncMsg}</span>}
+    </div>
+  );
+}
 
 function Panel({ title, right, children, className = "" }: { title: string; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
@@ -95,6 +136,7 @@ function normalize(j: DashboardData): DashboardData {
     })),
     gas: gas.filter((g) => g && Array.isArray(g.changes)),
     utilities: j.utilities && Array.isArray(j.utilities.entries) ? j.utilities : { source: "demo", canRecord: false, entries: [] },
+    services: j.services && typeof j.services === "object" ? j.services : {},
   };
 }
 
@@ -127,6 +169,10 @@ export function Dashboard() {
   // "auto": wall view on big landscape screens; "wall"/"scroll" force one.
   const [layout, setLayoutState] = useState<"auto" | "wall" | "scroll">("auto");
   const [bigScreen, setBigScreen] = useState(false);
+  // offline mode
+  const [online, setOnline] = useState(true);
+  const [pending, setPending] = useState(0);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
   const setLayout = (v: "auto" | "wall" | "scroll") => {
     setLayoutState(v);
@@ -164,10 +210,24 @@ export function Dashboard() {
         return;
       }
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      setData(normalize(await res.json()));
+      const j = await res.json();
+      setData(normalize(j));
       setError(null);
+      try {
+        localStorage.setItem(LAST_KEY, JSON.stringify(j)); // offline copy on this device
+      } catch {}
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load data");
+      // offline: fall back to the last copy saved on this device
+      setData((cur) => {
+        if (cur) return cur;
+        try {
+          const saved = localStorage.getItem(LAST_KEY);
+          return saved ? normalize(JSON.parse(saved)) : null;
+        } catch {
+          return null;
+        }
+      });
     } finally {
       setLoading(false);
     }
@@ -185,16 +245,44 @@ export function Dashboard() {
     const onVis = () => document.visibilityState === "visible" && load();
     document.addEventListener("visibilitychange", onVis);
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+    // offline / back online: send anything saved while offline, then refresh
+    const sync = async () => {
+      if (!outboxCount()) return load();
+      setSyncMsg("Syncing saved changes…");
+      const { sent, failed } = await flushOutbox();
+      setSyncMsg(
+        failed.length ? `Synced ${sent}, ${failed.length} not accepted: ${failed[0]}` : sent ? `✓ Synced ${sent} saved change${sent === 1 ? "" : "s"}` : null,
+      );
+      setTimeout(() => setSyncMsg(null), 6000);
+      load();
+    };
+    const goOnline = () => {
+      setOnline(true);
+      sync();
+    };
+    const goOffline = () => setOnline(false);
+    setOnline(navigator.onLine);
+    setPending(outboxCount());
+    const offOutbox = onOutboxChange(() => setPending(outboxCount()));
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    if (navigator.onLine && outboxCount()) sync();
     return () => {
       clearInterval(a);
       clearInterval(b);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+      offOutbox();
     };
   }, [load]);
 
   const updated = data ? new Date(data.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--";
   const unit = data?.units.find((u) => u.id === view) ?? null;
   const wall = layout === "wall" || (layout === "auto" && bigScreen);
+
+  const offlineBar = <OfflineBar online={online} error={error} pending={pending} updated={updated} syncMsg={syncMsg} />;
 
   if (wall && data && now) {
     return (
@@ -203,9 +291,10 @@ export function Dashboard() {
         now={now}
         updated={updated}
         loading={loading}
-        error={error}
+        error={online ? error : "offline"}
         onReload={load}
         onDetailed={() => setLayout("scroll")}
+        banner={offlineBar}
       />
     );
   }
@@ -273,11 +362,7 @@ export function Dashboard() {
 
       {data && <UnitTabs units={data.units} value={unit ? unit.id : "all"} onChange={setView} />}
 
-      {error && (
-        <div className="rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm text-red-200">
-          ⚠ Couldn’t refresh: {error}. {data ? "Showing last loaded data." : "Retrying automatically."}
-        </div>
-      )}
+      {offlineBar}
 
       {!data || !now ? <Skeleton /> : <Body data={data} now={now} updated={updated} unit={unit} onOpen={setView} onReload={load} />}
 
@@ -421,7 +506,7 @@ function Body({
         </Panel>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} now={now.getTime()} onChanged={onReload} />
+          <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} services={data.services} now={now.getTime()} onChanged={onReload} />
 
           <Panel
             title="Humidity"
@@ -534,7 +619,7 @@ function Body({
 
       {!unit && <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />}
 
-      <EnergyRecords key={unit?.id ?? "all"} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} location={data.location} onChanged={onReload} />
+      <EnergyRecords key={unit?.id ?? "all"} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} location={data.location} services={data.services} onChanged={onReload} />
     </>
   );
 }

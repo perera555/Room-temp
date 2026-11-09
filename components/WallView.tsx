@@ -129,6 +129,7 @@ export function WallView({
   error,
   onReload,
   onDetailed,
+  banner,
 }: {
   data: DashboardData;
   now: Date;
@@ -137,6 +138,7 @@ export function WallView({
   error: string | null;
   onReload: () => void;
   onDetailed: () => void;
+  banner?: ReactNode; // offline / sync status bar
 }) {
   const todayKey = dayKey(now);
   const f = data.forecast;
@@ -220,6 +222,8 @@ export function WallView({
           </Link>
         </div>
       </header>
+
+      {banner && <div className="shrink-0 empty:hidden">{banner}</div>}
 
       {conflicts.length > 0 && (
         <div className="shrink-0">
@@ -322,7 +326,7 @@ export function WallView({
                         </span>
                       </div>
                     ) : (
-                      <span className="text-[var(--ink-3)]">no gas</span>
+                      <span className="text-[var(--ink-3)]" title="Gas not in use now · available on request">not in use now</span>
                     )}
                     <span className="text-right tabular-nums text-[var(--ink-2)]" title="Electricity kWh per day (latest record)">
                       ⚡{el ? (el.amount / daysIn(el)).toFixed(1) : "–"}

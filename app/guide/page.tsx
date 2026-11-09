@@ -223,6 +223,12 @@ Content-Type: application/json
           days and usage per day. Filter the list by unit or type, and delete wrong entries with 🗑.
         </p>
         <p>
+          <b>Services checklist:</b> each unit has checkboxes ☑ Electricity ☑ Water ☐ Gas. Ticked = in use. Unticked = “Not in use now ·
+          available on request”. By default only <b>Unit 1</b> uses gas. When another unit starts using gas, press <b>🔥 Start gas</b>
+          (or tick Gas) and record its first cylinder. In <b>+ Add record</b> you can tick several services at once (each with its
+          own amount and cost), or tick <b>Not in use now</b> to mark a service as unused. Adding a record turns that service on.
+        </p>
+        <p>
           <b>Print / PDF:</b> the <b>🖨 Print report</b> button (top of the dashboard) opens a full report of everything: units and
           owners, room temperatures, all guest bookings with check-in and check-out times, gas cylinders, energy records with totals,
           and the weather. Press <b>Print</b>, or <b>Save as PDF</b> and choose “Save as PDF” as the printer. The Energy records list
@@ -280,7 +286,11 @@ Content-Type: application/json
           <li><b>Do I need an admin account?</b> No. Only your Vercel login to change settings. Optional password for viewers.</li>
           <li><b>Does it cost anything?</b> The app itself is free: Vercel’s free Hobby plan, Open-Meteo weather and Upstash’s free plan are enough. You only pay for sensors.</li>
           <li><b>How do I update the app?</b> Push changes to GitHub — Vercel redeploys automatically. Installed apps update on next open.</li>
-          <li><b>Offline?</b> The last loaded dashboard stays visible and refreshes when the connection returns.</li>
+          <li>
+            <b>Offline?</b> The installed app still opens and shows the last loaded data with a “📴 Offline” bar. Records, gas cylinders and
+            checklist changes made offline are kept on the device (“⏳ waiting to sync”) and sent automatically when the internet returns.
+            Live temperatures, weather and new bookings need the internet. Open the app once online on each device first.
+          </li>
           <li><b>A panel says “Sample data”.</b> That source isn’t connected yet, or its link failed. Check the setting and redeploy.</li>
         </ul>
       </Section>

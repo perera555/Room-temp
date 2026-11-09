@@ -1,5 +1,5 @@
-import { addGasChange, removeLastGasChange, storeEnabled } from "@/lib/store";
-import { UNITS } from "@/lib/units";
+import { addGasChange, removeLastGasChange, setService, storeEnabled } from "@/lib/store";
+import { UNITS } from "@/lib/units"; // any unit can start using gas: its first cylinder record turns the tracker on
 
 /**
  * Record that a new gas cylinder was fitted in a unit.
@@ -29,5 +29,6 @@ export async function POST(req: Request) {
   const t = body.date ? Date.parse(body.date) : Date.now();
   if (!Number.isFinite(t) || t > Date.now() + 86_400_000) return Response.json({ error: "Invalid date" }, { status: 400 });
   await addGasChange(unit, t);
+  await setService(unit, "gas", true); // fitting a cylinder means this unit now uses gas
   return Response.json({ ok: true });
 }

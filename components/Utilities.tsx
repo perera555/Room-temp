@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import type { GasState, UnitData, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
+import { sendOrQueue } from "@/lib/outbox";
+import type { GasState, Services, UnitData, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
 
 const DAY = 86_400_000;
 const fmt = (t: number) => new Date(t).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
@@ -37,11 +38,9 @@ export function lowestGas(gas: GasState[], now: number) {
 
 const latest = (entries: UtilityEntry[], unit: string, kind: UtilityKind) => entries.find((e) => e.unit === unit && e.kind === kind);
 
-async function post(url: string, body: object, method = "POST") {
-  const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: method === "DELETE" ? undefined : JSON.stringify(body) });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j.error ?? `Error ${res.status}`);
-  return j;
+/** Save to the server, or, when offline, keep it on this device and sync later. */
+function post(url: string, body: object, method = "POST") {
+  return sendOrQueue(url, method, method === "DELETE" ? null : body);
 }
 
 /* ------------------------------------------------------------------ */
@@ -79,11 +78,13 @@ function Ring({ pct, level }: { pct: number; level: string }) {
 /* ------------------------------------------------------------------ */
 export function EnergyForm({
   units,
+  services,
   defaultUnit,
   onClose,
   onSaved,
 }: {
   units: UnitData[];
+  services: Services; // which services each unit uses
   defaultUnit?: string;
   onClose: () => void;
   onSaved: () => void;
@@ -93,22 +94,27 @@ export function EnergyForm({
   const monthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
   const monthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
   const firstUnit = units.find((u) => u.id === defaultUnit) ?? units[0];
+  const KINDS = Object.keys(KIND) as UtilityKind[];
   const [f, setF] = useState({
     unit: firstUnit?.id ?? "",
-    kind: "electricity" as UtilityKind,
     from: iso(monthStart),
     to: iso(monthEnd),
-    amount: "",
-    cost: "",
     customer: firstUnit?.owner ?? "",
     account: "",
     note: "",
   });
+  // checklist: which services this record covers, each with its own amount + cost
+  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: true, water: false, gas: false });
+  const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5" });
+  const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "" });
+  // "Not in use now" field: mark services this unit does not use at the moment
+  const [notInUse, setNotInUse] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
   const days = f.from && f.to ? Math.max(1, Math.round((Date.parse(f.to) - Date.parse(f.from)) / DAY) + 1) : null;
-  const perDay = days && f.amount ? Number(f.amount) / days : null;
+  const chosen = KINDS.filter((k) => picked[k]);
+  const totalCost = chosen.reduce((a, k) => a + (Number(cost[k]) || 0), 0);
 
   const input = "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none ring-sky-500/50 focus:ring-2";
   const label = "mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]";
@@ -120,10 +126,22 @@ export function EnergyForm({
         onClick={(e) => e.stopPropagation()}
         onSubmit={async (e) => {
           e.preventDefault();
+          const off = KINDS.filter((k) => notInUse[k] && !picked[k]);
+          if (!chosen.length && !off.length) {
+            setErr("Tick at least one service, or mark one as “Not in use now”");
+            return;
+          }
           setBusy(true);
           setErr(null);
           try {
-            await post("/api/utilities", { ...f, amount: Number(f.amount), cost: f.cost === "" ? null : Number(f.cost) });
+            // one record per ticked service
+            for (const k of chosen) {
+              await post("/api/utilities", { ...f, kind: k, amount: Number(amount[k]), cost: cost[k] === "" ? null : Number(cost[k]) });
+            }
+            // services marked "Not in use now"
+            for (const k of off) {
+              await post("/api/services", { unit: f.unit, kind: k, on: false });
+            }
             onSaved();
             onClose();
           } catch (x) {
@@ -141,19 +159,38 @@ export function EnergyForm({
           </button>
         </div>
 
-        <div className="mb-3 grid grid-cols-3 gap-2">
-          {(Object.keys(KIND) as UtilityKind[]).map((k) => (
-            <button
-              type="button"
+        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Services · tick one or more</div>
+        <div className="mb-2 grid grid-cols-3 gap-2">
+          {KINDS.map((k) => (
+            <ServiceCheck
               key={k}
-              onClick={() => set("kind", k)}
-              className={`chip-3d rounded-xl border px-2 py-2 text-sm font-semibold ${
-                f.kind === k ? "border-sky-400/60 bg-sky-500/20 text-white" : "border-white/10 bg-black/30 text-[var(--ink-2)]"
-              }`}
-            >
-              {KIND[k].icon} {KIND[k].label}
-            </button>
+              kind={k}
+              on={picked[k]}
+              busy={busy}
+              compact
+              onChange={(on) => {
+                setPicked((p) => ({ ...p, [k]: on }));
+                if (on) setNotInUse((p) => ({ ...p, [k]: false }));
+              }}
+            />
           ))}
+        </div>
+        <div className="mb-3 rounded-xl border border-dashed border-white/10 bg-black/20 px-3 py-2">
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Not in use now (in this unit)</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {KINDS.map((k) => (
+              <label key={k} className={`flex cursor-pointer items-center gap-2 text-sm ${picked[k] ? "opacity-40" : "text-[var(--ink-2)]"}`}>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-amber-500"
+                  checked={notInUse[k]}
+                  disabled={busy || picked[k]}
+                  onChange={(e) => setNotInUse((p) => ({ ...p, [k]: e.target.checked }))}
+                />
+                {KIND[k].icon} {KIND[k].label}
+              </label>
+            ))}
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -174,6 +211,11 @@ export function EnergyForm({
                 </option>
               ))}
             </select>
+            {chosen.some((k) => services[f.unit]?.[k] === false) && (
+              <p className="mt-1 text-[11px] text-amber-300">
+                Not in use yet in this unit: {chosen.filter((k) => services[f.unit]?.[k] === false).map((k) => KIND[k].label).join(", ")}. Saving turns it on.
+              </p>
+            )}
           </div>
           <div>
             <label className={label} htmlFor="ef-from">From</label>
@@ -183,14 +225,46 @@ export function EnergyForm({
             <label className={label} htmlFor="ef-to">To</label>
             <input id="ef-to" type="date" required min={f.from} className={input} value={f.to} onChange={(e) => set("to", e.target.value)} />
           </div>
-          <div>
-            <label className={label} htmlFor="ef-amount">Used ({KIND[f.kind].unit})</label>
-            <input id="ef-amount" type="number" step="any" min="0" required inputMode="decimal" className={input} value={f.amount} onChange={(e) => set("amount", e.target.value)} placeholder={f.kind === "gas" ? "12.5" : ""} />
-          </div>
-          <div>
-            <label className={label} htmlFor="ef-cost">Cost (LKR)</label>
-            <input id="ef-cost" type="number" step="any" min="0" inputMode="decimal" className={input} value={f.cost} onChange={(e) => set("cost", e.target.value)} placeholder="optional" />
-          </div>
+          {chosen.map((k) => (
+            <div key={k} className="col-span-2 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/20 p-2.5">
+              <div className="col-span-2 -mb-1 text-xs font-semibold" style={{ color: KIND[k].color }}>
+                {KIND[k].icon} {KIND[k].label}
+                {days && Number(amount[k]) > 0 && (
+                  <span className="ml-2 font-normal text-[var(--ink-3)]">
+                    {(Number(amount[k]) / days).toFixed(2)} {KIND[k].unit.split(" ")[0]}/day
+                  </span>
+                )}
+              </div>
+              <div>
+                <label className={label} htmlFor={`ef-amount-${k}`}>Used ({KIND[k].unit})</label>
+                <input
+                  id={`ef-amount-${k}`}
+                  type="number"
+                  step="any"
+                  min="0"
+                  required
+                  inputMode="decimal"
+                  className={input}
+                  value={amount[k]}
+                  onChange={(e) => setAmount((p) => ({ ...p, [k]: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className={label} htmlFor={`ef-cost-${k}`}>Cost (LKR)</label>
+                <input
+                  id={`ef-cost-${k}`}
+                  type="number"
+                  step="any"
+                  min="0"
+                  inputMode="decimal"
+                  className={input}
+                  value={cost[k]}
+                  onChange={(e) => setCost((p) => ({ ...p, [k]: e.target.value }))}
+                  placeholder="optional"
+                />
+              </div>
+            </div>
+          ))}
           <div>
             <label className={label} htmlFor="ef-customer">Customer</label>
             <input id="ef-customer" className={input} value={f.customer} onChange={(e) => set("customer", e.target.value)} placeholder="Name on the bill" />
@@ -207,7 +281,8 @@ export function EnergyForm({
 
         {days && (
           <p className="mt-3 text-xs text-[var(--ink-2)]">
-            {days} days{perDay != null && Number.isFinite(perDay) ? ` · ${perDay.toFixed(2)} ${KIND[f.kind].unit.split(" ")[0]} per day` : ""}
+            {days} days · {chosen.length} record{chosen.length === 1 ? "" : "s"}
+            {totalCost > 0 && ` · total LKR ${Math.round(totalCost).toLocaleString()}`}
           </p>
         )}
         {err && <p className="mt-2 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200">{err}</p>}
@@ -216,7 +291,7 @@ export function EnergyForm({
             Cancel
           </button>
           <button disabled={busy} className="rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 px-5 py-2 text-sm font-semibold text-white shadow-lg hover:brightness-110 disabled:opacity-50">
-            {busy ? "Saving…" : "Save record"}
+            {busy ? "Saving…" : chosen.length > 1 ? `Save ${chosen.length} records` : "Save record"}
           </button>
         </div>
       </form>
@@ -244,6 +319,7 @@ export function UtilitiesPanel({
   utilities,
   units,
   unitId,
+  services,
   now,
   onChanged,
 }: {
@@ -251,20 +327,24 @@ export function UtilitiesPanel({
   utilities: UtilitiesState;
   units: UnitData[];
   unitId: string | null;
+  services: Services;
   now: number;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState(false);
+  const [fitting, setFitting] = useState<GasState | null>(null);
   const demo = utilities.source === "demo" || gas.some((g) => g.source === "demo");
 
-  async function gasAction(unit: string, action: "fitted" | "undo", confirmText: string) {
-    if (!window.confirm(confirmText)) return;
+  async function toggleService(unit: string, kind: UtilityKind, on: boolean) {
+    const name = units.find((u) => u.id === unit)?.name ?? unit;
+    const text = on ? `Mark ${KIND[kind].label.toLowerCase()} as IN USE for ${name}?` : `Mark ${KIND[kind].label.toLowerCase()} as NOT IN USE for ${name}? (records are kept)`;
+    if (!window.confirm(text)) return;
     setBusy(true);
     setMsg(null);
     try {
-      await post("/api/gas", { unit, action });
+      await post("/api/services", { unit, kind, on });
       setMsg("Saved ✓");
       onChanged();
     } catch (e) {
@@ -274,7 +354,33 @@ export function UtilitiesPanel({
     }
   }
 
+  async function undoGas(unit: string) {
+    if (!window.confirm("Remove the most recent cylinder record?")) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await post("/api/gas", { unit, action: "undo" });
+      setMsg("Removed ✓");
+      onChanged();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Could not save");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const one = unitId ? gas.find((g) => g.unit === unitId) : null;
+  // a blank tracker for a unit that starts using gas (its first cylinder turns tracking on)
+  const startGas = (id: string): GasState => ({
+    unit: id,
+    unitName: units.find((u) => u.id === id)?.name ?? id,
+    source: "live",
+    canRecord: utilities.canRecord,
+    sizeKg: gas[0]?.sizeKg ?? 12.5,
+    changes: [],
+    typicalDays: gas[0]?.typicalDays ?? 90,
+    learned: false,
+  });
   const unitName = unitId ? units.find((u) => u.id === unitId)?.name : null;
 
   return (
@@ -291,10 +397,12 @@ export function UtilitiesPanel({
         </div>
       </header>
 
+      {unitId && <ServiceSwitches unit={unitId} services={services} busy={busy} onToggle={toggleService} />}
+
       {one ? (
-        <UnitEnergy g={one} utilities={utilities} now={now} busy={busy} onGas={gasAction} />
+        <UnitEnergy g={one} utilities={utilities} services={services} now={now} busy={busy} onFitted={() => setFitting(one)} onUndo={() => undoGas(one.unit)} />
       ) : unitId ? (
-        <p className="text-sm text-[var(--ink-3)]">No gas cylinder in this unit.</p>
+        <NoGasUnit unitId={unitId} utilities={utilities} services={services} onStart={() => setFitting(startGas(unitId))} />
       ) : (
         <div className="space-y-2">
           {units.map((u) => {
@@ -303,21 +411,45 @@ export function UtilitiesPanel({
             return (
               <div key={u.id} className="chip-3d grid grid-cols-[64px_1fr] items-center gap-2 rounded-xl border border-white/5 bg-black/25 px-3 py-2">
                 <b className="text-sm text-[var(--ink-1)]">{u.name}</b>
-                <div className="min-w-0 space-y-1 text-xs text-[var(--ink-2)]">
-                  {s ? (
+                <div className="min-w-0 space-y-1.5 text-xs text-[var(--ink-2)]">
+                  <ServiceSwitches unit={u.id} services={services} busy={busy} onToggle={toggleService} compact />
+                  {s && g ? (
                     <div className="flex items-center gap-2">
                       <span className="w-16 shrink-0">🔥 Gas {s.pct}%</span>
                       <div className="min-w-0 flex-1">
                         <Bar pct={s.pct} level={s.level} />
                       </div>
                       <span className={`shrink-0 tabular-nums ${s.level !== "ok" ? "font-semibold text-amber-300" : ""}`}>{s.daysLeft}d left</span>
+                      <button
+                        onClick={() => setFitting(g)}
+                        className="shrink-0 rounded-full bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold text-orange-200 ring-1 ring-orange-400/40 hover:bg-orange-500/30"
+                        title="Record a new cylinder (date, cost)"
+                      >
+                        + New cylinder
+                      </button>
                     </div>
                   ) : (
-                    <div className="text-[var(--ink-3)]">🔥 no cylinder</div>
+                    <div className="flex items-center justify-between gap-2 text-[var(--ink-3)]">
+                      <span>🔥 Gas: not in use now · available on request</span>
+                      <button
+                        onClick={() => setFitting(startGas(u.id))}
+                        className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-orange-200 ring-1 ring-white/10 hover:bg-orange-500/20"
+                        title="This unit starts using gas: record its first cylinder"
+                      >
+                        🔥 Start gas
+                      </button>
+                    </div>
                   )}
                   <div className="flex flex-wrap justify-between gap-x-3">
-                    <LatestLine e={latest(utilities.entries, u.id, "electricity")} kind="electricity" />
-                    <LatestLine e={latest(utilities.entries, u.id, "water")} kind="water" />
+                    {(["electricity", "water"] as const).map((k) =>
+                      services[u.id]?.[k] === false ? (
+                        <span key={k} className="text-[var(--ink-3)]">
+                          {KIND[k].icon} not in use now
+                        </span>
+                      ) : (
+                        <LatestLine key={k} e={latest(utilities.entries, u.id, k)} kind={k} />
+                      ),
+                    )}
                   </div>
                 </div>
               </div>
@@ -326,23 +458,269 @@ export function UtilitiesPanel({
         </div>
       )}
       {msg && <p className="mt-2 text-xs text-[var(--ink-2)]">{msg}</p>}
-      {form && <EnergyForm units={units} defaultUnit={unitId ?? undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
+      {form && <EnergyForm units={units} services={services} defaultUnit={unitId ?? undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
+      {fitting && (
+        <GasFittedForm
+          g={fitting}
+          customer={units.find((u) => u.id === fitting.unit)?.owner ?? ""}
+          onClose={() => setFitting(null)}
+          onSaved={() => {
+            setMsg("New cylinder saved ✓");
+            onChanged();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+/** One checklist box: ticked = service in use, unticked = not in use (available on request). */
+function ServiceCheck({
+  kind,
+  on,
+  busy,
+  onChange,
+  compact = false,
+}: {
+  kind: UtilityKind;
+  on: boolean;
+  busy: boolean;
+  onChange: (on: boolean) => void;
+  compact?: boolean;
+}) {
+  return (
+    <label
+      className={`chip-3d flex cursor-pointer select-none items-center gap-2 rounded-xl border transition ${busy ? "opacity-50" : ""} ${
+        on ? "border-emerald-400/40 bg-emerald-500/15" : "border-dashed border-white/15 bg-black/25"
+      } ${compact ? "px-2 py-1" : "px-3 py-2"}`}
+      title={on ? `${KIND[kind].label}: in use (untick if not used)` : `${KIND[kind].label}: not in use, available on request (tick when used)`}
+    >
+      <input type="checkbox" className="peer sr-only" checked={on} disabled={busy} onChange={(e) => onChange(e.target.checked)} />
+      <span
+        aria-hidden
+        className={`grid shrink-0 place-items-center rounded-md border-2 font-bold peer-focus-visible:ring-2 peer-focus-visible:ring-sky-400 ${
+          compact ? "h-4 w-4 text-[10px]" : "h-5 w-5 text-xs"
+        } ${on ? "border-emerald-400 bg-emerald-500 text-white" : "border-white/30 bg-transparent text-transparent"}`}
+      >
+        ✓
+      </span>
+      <span className="min-w-0">
+        <span className={`block font-semibold text-[var(--ink-1)] ${compact ? "text-[11px]" : "text-sm"}`}>
+          {KIND[kind].icon} {KIND[kind].label}
+        </span>
+        {!compact && <span className={`block text-[11px] ${on ? "text-emerald-300" : "text-[var(--ink-3)]"}`}>{on ? "In use" : "Not in use now"}</span>}
+      </span>
+    </label>
+  );
+}
+
+/** Checklist: which services this unit uses (electricity, water, gas). */
+function ServiceSwitches({
+  unit,
+  services,
+  busy,
+  onToggle,
+  compact = false,
+}: {
+  unit: string;
+  services: Services;
+  busy: boolean;
+  onToggle: (unit: string, kind: UtilityKind, on: boolean) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={compact ? "" : "mb-3"}>
+      {!compact && <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services checklist · tick what this unit uses</div>}
+      <div className={`grid grid-cols-3 ${compact ? "gap-1.5" : "gap-2"}`}>
+        {(["electricity", "water", "gas"] as const).map((k) => (
+          <ServiceCheck key={k} kind={k} on={services[unit]?.[k] ?? false} busy={busy} compact={compact} onChange={(on) => onToggle(unit, k, on)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Electricity + water latest-record cards for one unit. */
+function ElecWater({ unit, utilities, services }: { unit: string; utilities: UtilitiesState; services: Services }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {(["electricity", "water"] as const).map((k) => {
+        const e = latest(utilities.entries, unit, k);
+        const off = services[unit]?.[k] === false;
+        return (
+          <div key={k} className={`chip-3d rounded-xl border p-3 text-sm ${off ? "border-dashed border-white/15 bg-black/15" : "border-white/5 bg-black/25"}`}>
+            <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: KIND[k].color }}>
+              {KIND[k].icon} {KIND[k].label}
+            </div>
+            {off ? (
+              <div className="mt-1 text-xs text-[var(--ink-3)]">Not in use now · available on request</div>
+            ) : e ? (
+              <>
+                <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--ink-1)]">
+                  {e.amount} <span className="text-xs font-normal text-[var(--ink-3)]">{KIND[k].unit.split(" ")[0]}</span>
+                </div>
+                <div className="text-xs text-[var(--ink-2)]">
+                  {fmtDay(e.from)} → {fmtDay(e.to)}
+                </div>
+                <div className="text-xs text-[var(--ink-2)]">
+                  {(e.amount / daysIn(e)).toFixed(1)}/day · {lkr(e.cost)}
+                </div>
+              </>
+            ) : (
+              <div className="mt-1 text-xs text-[var(--ink-3)]">No record yet. Use + Add record.</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Unit page for a unit that does not use gas (available on request). */
+function NoGasUnit({ unitId, utilities, services, onStart }: { unitId: string; utilities: UtilitiesState; services: Services; onStart: () => void }) {
+  return (
+    <div className="space-y-3">
+      <div className="chip-3d flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-100/90">
+        <span>
+          🔥 <b>Gas: not in use now.</b> Available on request. When this unit starts using gas, record its first cylinder and the tracker appears here.
+        </span>
+        <button onClick={onStart} className="rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow hover:brightness-110">
+          🔥 Start gas for this unit
+        </button>
+      </div>
+      <ElecWater unit={unitId} utilities={utilities} services={services} />
+    </div>
+  );
+}
+
+/**
+ * "New cylinder fitted" form: date, cost, customer, note.
+ * Saves the cylinder change (restarts the gas tracker) AND a gas record
+ * in the energy list covering the previous cylinder (From → To).
+ */
+function GasFittedForm({ g, customer, onClose, onSaved }: { g: GasState; customer: string; onClose: () => void; onSaved: () => void }) {
+  const today = new Date();
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const prev = g.changes.at(-1);
+  const [f, setF] = useState({ date: iso(today), cost: "", customer, supplier: "Litro", note: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
+  const fromDay = prev ? iso(new Date(prev)) : null;
+  const lasted = prev ? Math.round((Date.parse(f.date) - new Date(fromDay + "T00:00:00").getTime()) / DAY) : null;
+
+  const input = "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none ring-orange-400/50 focus:ring-2";
+  const label = "mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]";
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm" onClick={onClose}>
+      <form
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          setErr(null);
+          try {
+            // 1) restart the tracker from the new cylinder's date
+            await post("/api/gas", { unit: g.unit, action: "fitted", date: f.date + "T09:00:00" });
+            // 2) add a gas record for the cylinder that just finished (or the new one if there is no history)
+            const note = [f.supplier && `${f.supplier} ${g.sizeKg} kg`, f.note].filter(Boolean).join(" · ");
+            await post("/api/utilities", {
+              unit: g.unit,
+              kind: "gas",
+              from: fromDay && fromDay < f.date ? fromDay : f.date,
+              to: f.date,
+              amount: g.sizeKg,
+              cost: f.cost === "" ? null : Number(f.cost),
+              customer: f.customer,
+              account: "",
+              note: note || "New cylinder",
+            });
+            onSaved();
+            onClose();
+          } catch (x) {
+            setErr(x instanceof Error ? x.message : "Could not save");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        className="card-3d w-full max-w-md rounded-2xl p-5 hover:!translate-y-0"
+      >
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">🔥 New gas cylinder · {g.unitName}</h2>
+          <button type="button" onClick={onClose} className="rounded-full px-2 text-xl text-[var(--ink-3)] hover:text-white" aria-label="Close">
+            ×
+          </button>
+        </div>
+        {prev && (
+          <p className="mb-3 rounded-lg bg-white/5 px-3 py-2 text-xs text-[var(--ink-2)]">
+            Previous cylinder fitted <b className="text-white">{fmt(prev)}</b>
+            {lasted != null && lasted > 0 && (
+              <>
+                {" "}
+                · it lasted <b className="text-white">{lasted} days</b>
+              </>
+            )}
+            . This is saved as a gas record (From → To).
+          </p>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={label} htmlFor="gf-date">Date fitted</label>
+            <input id="gf-date" type="date" required max={iso(today)} className={input} value={f.date} onChange={(e) => set("date", e.target.value)} />
+          </div>
+          <div>
+            <label className={label} htmlFor="gf-cost">Cost (LKR)</label>
+            <input id="gf-cost" type="number" min="0" step="any" inputMode="decimal" className={input} value={f.cost} onChange={(e) => set("cost", e.target.value)} placeholder="e.g. 4250" />
+          </div>
+          <div>
+            <label className={label} htmlFor="gf-supplier">Supplier</label>
+            <select id="gf-supplier" className={input} value={f.supplier} onChange={(e) => set("supplier", e.target.value)}>
+              <option>Litro</option>
+              <option>Laugfs</option>
+              <option value="">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className={label} htmlFor="gf-customer">Customer</label>
+            <input id="gf-customer" className={input} value={f.customer} onChange={(e) => set("customer", e.target.value)} />
+          </div>
+          <div className="col-span-2">
+            <label className={label} htmlFor="gf-note">Note</label>
+            <input id="gf-note" className={input} value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="e.g. delivered by shop, receipt no." />
+          </div>
+        </div>
+        {err && <p className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200">{err}</p>}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-full border border-white/10 px-4 py-2 text-sm text-[var(--ink-2)] hover:text-white">
+            Cancel
+          </button>
+          <button disabled={busy} className="rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-5 py-2 text-sm font-semibold text-white shadow-lg hover:brightness-110 disabled:opacity-50">
+            {busy ? "Saving…" : "Save new cylinder"}
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body,
   );
 }
 
 function UnitEnergy({
   g,
   utilities,
+  services,
   now,
   busy,
-  onGas,
+  onFitted,
+  onUndo,
 }: {
   g: GasState;
   utilities: UtilitiesState;
+  services: Services;
   now: number;
   busy: boolean;
-  onGas: (unit: string, action: "fitted" | "undo", confirmText: string) => void;
+  onFitted: () => void;
+  onUndo: () => void;
 }) {
   const s = gasSummary(g, now);
   const history = g.changes
@@ -376,13 +754,13 @@ function UnitEnergy({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             disabled={busy}
-            onClick={() => onGas(g.unit, "fitted", `Record a new ${g.sizeKg} kg cylinder fitted in ${g.unitName} today?`)}
+            onClick={onFitted}
             className="rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow hover:brightness-110 disabled:opacity-50"
           >
             New cylinder fitted
           </button>
           {g.source === "live" && (
-            <button disabled={busy} onClick={() => onGas(g.unit, "undo", "Remove the most recent cylinder record?")} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-[var(--ink-2)] hover:text-white">
+            <button disabled={busy} onClick={onUndo} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-[var(--ink-2)] hover:text-white">
               Undo last
             </button>
           )}
@@ -398,33 +776,7 @@ function UnitEnergy({
           </ul>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-2">
-        {(["electricity", "water"] as const).map((k) => {
-          const e = latest(utilities.entries, g.unit, k);
-          return (
-            <div key={k} className="chip-3d rounded-xl border border-white/5 bg-black/25 p-3 text-sm">
-              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: KIND[k].color }}>
-                {KIND[k].icon} {KIND[k].label}
-              </div>
-              {e ? (
-                <>
-                  <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--ink-1)]">
-                    {e.amount} <span className="text-xs font-normal text-[var(--ink-3)]">{KIND[k].unit.split(" ")[0]}</span>
-                  </div>
-                  <div className="text-xs text-[var(--ink-2)]">
-                    {fmtDay(e.from)} → {fmtDay(e.to)}
-                  </div>
-                  <div className="text-xs text-[var(--ink-2)]">
-                    {(e.amount / daysIn(e)).toFixed(1)}/day · {lkr(e.cost)}
-                  </div>
-                </>
-              ) : (
-                <div className="mt-1 text-xs text-[var(--ink-3)]">No record yet. Use + Add record.</div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <ElecWater unit={g.unit} utilities={utilities} services={services} />
     </div>
   );
 }
@@ -514,12 +866,14 @@ export function EnergyRecords({
   units,
   unitId,
   location,
+  services,
   onChanged,
 }: {
   utilities: UtilitiesState;
   units: UnitData[];
   unitId: string | null;
   location: string;
+  services: Services;
   onChanged: () => void;
 }) {
   const [unit, setUnit] = useState<string>(unitId ?? "all");
@@ -655,7 +1009,7 @@ export function EnergyRecords({
           )}
         </table>
       </div>
-      {form && <EnergyForm units={units} defaultUnit={unit !== "all" ? unit : undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
+      {form && <EnergyForm units={units} services={services} defaultUnit={unit !== "all" ? unit : undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
     </section>
   );
 }
