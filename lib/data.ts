@@ -473,8 +473,7 @@ function demoBookings(now: number): Booking[] {
   const unit = airbnbUnitIds()[0] ?? "unit3";
   const plan: Record<string, [string, number, number][]> = {
     "Bedroom 1": [["Faye", -7, -4], ["Alberto", -3, 2], ["Calum", 6, 10], ["Marta", 15, 20]],
-    // "Omar" overlaps "Lena" on purpose, to show the overbooking alert in sample mode
-    "Bedroom 2": [["Kenji", -2, 4], ["Sophie", 5, 8], ["Lena", 11, 18], ["Omar", 9, 12]],
+    "Bedroom 2": [["Kenji", -2, 4], ["Sophie", 5, 8], ["Lena", 11, 18]],
     "Bedroom 3": [["Priya", 1, 3], ["Diego", 4, 11], ["Hannah", 13, 16], ["Tomás", 19, 23]],
   };
   return Object.entries(plan).flatMap(([room, rows]) =>
@@ -570,7 +569,7 @@ async function getGas(now: number): Promise<GasState[]> {
     const last = raw ? Date.parse(raw) : NaN;
     if (Number.isFinite(last)) return gasFrom(u, [last], "settings", canRecord);
     // sample history: cylinders lasting ~3 months, each unit at a different point
-    const ago = [41, 77, 12, 63][i % 4];
+    const ago = [41, 55, 12, 30][i % 4]; // all comfortably above the "order soon" level
     return gasFrom(u, [now - (ago + 181) * DAY, now - (ago + 90) * DAY, now - ago * DAY], "demo", canRecord);
   });
 }
