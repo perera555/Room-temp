@@ -74,20 +74,37 @@ export async function deleteUtilityEntry(id: string) {
 /* ---------------- Services in use per unit ---------------- */
 const SERVICES_KEY = "rt:services";
 
-/** Stored overrides: { unit2: { gas: true }, … } (missing = default). */
-export async function loadServiceOverrides(): Promise<Record<string, Record<string, boolean>>> {
+type StoredStatus = "in_use" | "on_request" | "off";
+
+/** Stored overrides: { unit2: { gas: "on_request" }, … } (missing = default). Old true/false values still read. */
+export async function loadServiceOverrides(): Promise<Record<string, Record<string, StoredStatus>>> {
   const [res] = await pipeline([["GET", SERVICES_KEY]]);
   try {
-    return res?.result ? JSON.parse(res.result as string) : {};
+    const raw: Record<string, Record<string, unknown>> = res?.result ? JSON.parse(res.result as string) : {};
+    const norm = (v: unknown): StoredStatus | undefined =>
+      v === true ? "in_use" : v === false ? "off" : v === "in_use" || v === "on_request" || v === "off" ? v : undefined;
+    return Object.fromEntries(
+      Object.entries(raw).map(([u, kinds]) => [
+        u,
+        Object.fromEntries(Object.entries(kinds).flatMap(([k, v]) => (norm(v) ? [[k, norm(v)!]] : []))),
+      ]),
+    );
   } catch {
     return {};
   }
 }
 
-export async function setService(unit: string, kind: string, on: boolean) {
+export async function setService(unit: string, kind: string, status: StoredStatus) {
   const all = await loadServiceOverrides();
-  all[unit] = { ...(all[unit] ?? {}), [kind]: on };
+  all[unit] = { ...(all[unit] ?? {}), [kind]: status };
   await pipeline([["SET", SERVICES_KEY, JSON.stringify(all)]]);
+}
+
+/** A new record/cylinder means the service is used: switch "off" to "in_use", but keep "on_request". */
+export async function markServiceUsed(unit: string, kind: string) {
+  const all = await loadServiceOverrides();
+  if (all[unit]?.[kind] === "on_request" || all[unit]?.[kind] === "in_use") return;
+  await setService(unit, kind, "in_use");
 }
 
 /* ---------------- Gas cylinder changes ---------------- */

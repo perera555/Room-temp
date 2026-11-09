@@ -326,7 +326,9 @@ export function WallView({
                         </span>
                       </div>
                     ) : (
-                      <span className="text-[var(--ink-3)]" title="Gas not in use now · available on request">not in use now</span>
+                      <span className="text-[var(--ink-3)]" title="Gas can be added any time">
+                        {data.services?.[u.id]?.gas === "on_request" ? "◐ on request" : "not in use now"}
+                      </span>
                     )}
                     <span className="text-right tabular-nums text-[var(--ink-2)]" title="Electricity kWh per day (latest record)">
                       ⚡{el ? (el.amount / daysIn(el)).toFixed(1) : "–"}

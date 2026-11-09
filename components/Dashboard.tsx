@@ -136,7 +136,15 @@ function normalize(j: DashboardData): DashboardData {
     })),
     gas: gas.filter((g) => g && Array.isArray(g.changes)),
     utilities: j.utilities && Array.isArray(j.utilities.entries) ? j.utilities : { source: "demo", canRecord: false, entries: [] },
-    services: j.services && typeof j.services === "object" ? j.services : {},
+    // older cached data used true/false; convert to the three statuses
+    services: Object.fromEntries(
+      Object.entries(j.services && typeof j.services === "object" ? j.services : {}).map(([u, kinds]) => [
+        u,
+        Object.fromEntries(
+          Object.entries(kinds as Record<string, unknown>).map(([k, v]) => [k, v === true ? "in_use" : v === false ? "off" : v]),
+        ),
+      ]),
+    ) as DashboardData["services"],
   };
 }
 

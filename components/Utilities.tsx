@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { sendOrQueue } from "@/lib/outbox";
-import type { GasState, Services, UnitData, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
+import type { GasState, ServiceStatus, Services, UnitData, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
 
 const DAY = 86_400_000;
 const fmt = (t: number) => new Date(t).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
@@ -35,6 +35,32 @@ export function lowestGas(gas: GasState[], now: number) {
     .map((g) => ({ g, s: gasSummary(g, now) }))
     .sort((a, b) => a.s.pct - b.s.pct)[0];
 }
+
+/** Labels and colours for the three service statuses. */
+export const STATUS: Record<ServiceStatus, { label: string; short: string; long: string; active: string; chip: string }> = {
+  in_use: {
+    label: "In use",
+    short: "in use",
+    long: "In use",
+    active: "border-emerald-400/60 bg-emerald-500/20 text-emerald-100",
+    chip: "border-emerald-400/40 bg-emerald-500/15 text-emerald-200",
+  },
+  on_request: {
+    label: "On request",
+    short: "on request",
+    long: "On request · provided whenever a tenant needs it",
+    active: "border-sky-400/60 bg-sky-500/20 text-sky-100",
+    chip: "border-sky-400/40 bg-sky-500/15 text-sky-200",
+  },
+  off: {
+    label: "Not in use now",
+    short: "not in use",
+    long: "Not in use now · can be added any time",
+    active: "border-amber-400/60 bg-amber-500/20 text-amber-100",
+    chip: "border-dashed border-white/15 bg-black/25 text-[var(--ink-3)]",
+  },
+};
+const NEXT_STATUS: Record<ServiceStatus, ServiceStatus> = { in_use: "on_request", on_request: "off", off: "in_use" };
 
 const latest = (entries: UtilityEntry[], unit: string, kind: UtilityKind) => entries.find((e) => e.unit === unit && e.kind === kind);
 
@@ -104,11 +130,12 @@ export function EnergyForm({
     note: "",
   });
   // checklist: which services this record covers, each with its own amount + cost
-  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: true, water: false, gas: false });
+  // nothing pre-ticked: only services the user ticks ask for an amount
+  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false });
   const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5" });
   const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "" });
-  // "Not in use now" field: mark services this unit does not use at the moment
-  const [notInUse, setNotInUse] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false });
+  // "Status in this unit" field: In use / On request / Not in use now ("" = leave as it is)
+  const [statusSel, setStatusSel] = useState<Record<UtilityKind, "" | ServiceStatus>>({ electricity: "", water: "", gas: "" });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -126,9 +153,14 @@ export function EnergyForm({
         onClick={(e) => e.stopPropagation()}
         onSubmit={async (e) => {
           e.preventDefault();
-          const off = KINDS.filter((k) => notInUse[k] && !picked[k]);
-          if (!chosen.length && !off.length) {
-            setErr("Tick at least one service, or mark one as “Not in use now”");
+          const statusChanges = KINDS.filter((k) => statusSel[k] !== "");
+          if (!chosen.length && !statusChanges.length) {
+            setErr("Tick a service to add its bill, or choose a status (In use / On request / Not in use now)");
+            return;
+          }
+          const missing = chosen.filter((k) => amount[k].trim() === "");
+          if (missing.length) {
+            setErr(`Enter “Used” for ${missing.map((k) => KIND[k].label).join(" and ")}, or untick it`);
             return;
           }
           setBusy(true);
@@ -138,9 +170,9 @@ export function EnergyForm({
             for (const k of chosen) {
               await post("/api/utilities", { ...f, kind: k, amount: Number(amount[k]), cost: cost[k] === "" ? null : Number(cost[k]) });
             }
-            // services marked "Not in use now"
-            for (const k of off) {
-              await post("/api/services", { unit: f.unit, kind: k, on: false });
+            // status chosen for this unit (saved after the records, so it wins)
+            for (const k of statusChanges) {
+              await post("/api/services", { unit: f.unit, kind: k, status: statusSel[k] });
             }
             onSaved();
             onClose();
@@ -170,25 +202,46 @@ export function EnergyForm({
               compact
               onChange={(on) => {
                 setPicked((p) => ({ ...p, [k]: on }));
-                if (on) setNotInUse((p) => ({ ...p, [k]: false }));
+                if (on && statusSel[k] === "off") setStatusSel((p) => ({ ...p, [k]: "" }));
               }}
             />
           ))}
         </div>
         <div className="mb-3 rounded-xl border border-dashed border-white/10 bg-black/20 px-3 py-2">
-          <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Not in use now (in this unit)</div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1">
+          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">
+            Status in this unit <span className="normal-case tracking-normal">(optional · now: {KINDS.map((k) => `${KIND[k].icon} ${STATUS[services[f.unit]?.[k] ?? "off"].short}`).join("  ")})</span>
+          </div>
+          <div className="space-y-1.5">
             {KINDS.map((k) => (
-              <label key={k} className={`flex cursor-pointer items-center gap-2 text-sm ${picked[k] ? "opacity-40" : "text-[var(--ink-2)]"}`}>
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 accent-amber-500"
-                  checked={notInUse[k]}
-                  disabled={busy || picked[k]}
-                  onChange={(e) => setNotInUse((p) => ({ ...p, [k]: e.target.checked }))}
-                />
-                {KIND[k].icon} {KIND[k].label}
-              </label>
+              <div key={k} className="flex items-center gap-2">
+                <span className="w-24 shrink-0 text-sm text-[var(--ink-2)]">
+                  {KIND[k].icon} {KIND[k].label}
+                </span>
+                <div className="grid flex-1 grid-cols-3 gap-1">
+                  {(["in_use", "on_request", "off"] as const).map((s) => (
+                    <label
+                      key={s}
+                      className={`flex cursor-pointer items-center justify-center gap-1 rounded-lg border px-1.5 py-1 text-center text-[11px] font-semibold ${
+                        statusSel[k] === s ? STATUS[s].active : "border-white/10 text-[var(--ink-3)] hover:text-white"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="sr-only"
+                        checked={statusSel[k] === s}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const v = e.target.checked ? s : "";
+                          setStatusSel((p) => ({ ...p, [k]: v }));
+                          // not in use → no bill for it, so no "Used" amount is asked
+                          if (v === "off") setPicked((p) => ({ ...p, [k]: false }));
+                        }}
+                      />
+                      {statusSel[k] === s ? "☑" : "☐"} {STATUS[s].label}
+                    </label>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -211,9 +264,10 @@ export function EnergyForm({
                 </option>
               ))}
             </select>
-            {chosen.some((k) => services[f.unit]?.[k] === false) && (
+            {chosen.some((k) => services[f.unit]?.[k] === "off" && statusSel[k] === "") && (
               <p className="mt-1 text-[11px] text-amber-300">
-                Not in use yet in this unit: {chosen.filter((k) => services[f.unit]?.[k] === false).map((k) => KIND[k].label).join(", ")}. Saving turns it on.
+                Not in use yet in this unit: {chosen.filter((k) => services[f.unit]?.[k] === "off").map((k) => KIND[k].label).join(", ")}. Saving marks it “In use”
+                (or pick “On request” below).
               </p>
             )}
           </div>
@@ -225,6 +279,11 @@ export function EnergyForm({
             <label className={label} htmlFor="ef-to">To</label>
             <input id="ef-to" type="date" required min={f.from} className={input} value={f.to} onChange={(e) => set("to", e.target.value)} />
           </div>
+          {chosen.length === 0 && (
+            <p className="col-span-2 rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-[var(--ink-3)]">
+              Tick ⚡ Electricity, 💧 Water or 🔥 Gas above to enter a bill. To only mark a service as not used, tick it under “Not in use now” and save.
+            </p>
+          )}
           {chosen.map((k) => (
             <div key={k} className="col-span-2 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/20 p-2.5">
               <div className="col-span-2 -mb-1 text-xs font-semibold" style={{ color: KIND[k].color }}>
@@ -242,7 +301,6 @@ export function EnergyForm({
                   type="number"
                   step="any"
                   min="0"
-                  required
                   inputMode="decimal"
                   className={input}
                   value={amount[k]}
@@ -291,7 +349,7 @@ export function EnergyForm({
             Cancel
           </button>
           <button disabled={busy} className="rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 px-5 py-2 text-sm font-semibold text-white shadow-lg hover:brightness-110 disabled:opacity-50">
-            {busy ? "Saving…" : chosen.length > 1 ? `Save ${chosen.length} records` : "Save record"}
+            {busy ? "Saving…" : chosen.length > 1 ? `Save ${chosen.length} records` : chosen.length === 1 ? "Save record" : "Save"}
           </button>
         </div>
       </form>
@@ -337,14 +395,13 @@ export function UtilitiesPanel({
   const [fitting, setFitting] = useState<GasState | null>(null);
   const demo = utilities.source === "demo" || gas.some((g) => g.source === "demo");
 
-  async function toggleService(unit: string, kind: UtilityKind, on: boolean) {
+  async function setStatus(unit: string, kind: UtilityKind, status: ServiceStatus) {
     const name = units.find((u) => u.id === unit)?.name ?? unit;
-    const text = on ? `Mark ${KIND[kind].label.toLowerCase()} as IN USE for ${name}?` : `Mark ${KIND[kind].label.toLowerCase()} as NOT IN USE for ${name}? (records are kept)`;
-    if (!window.confirm(text)) return;
+    if (!window.confirm(`${name}: set ${KIND[kind].label.toLowerCase()} to “${STATUS[status].label}”? (records are kept)`)) return;
     setBusy(true);
     setMsg(null);
     try {
-      await post("/api/services", { unit, kind, on });
+      await post("/api/services", { unit, kind, status });
       setMsg("Saved ✓");
       onChanged();
     } catch (e) {
@@ -397,7 +454,7 @@ export function UtilitiesPanel({
         </div>
       </header>
 
-      {unitId && <ServiceSwitches unit={unitId} services={services} busy={busy} onToggle={toggleService} />}
+      {unitId && <ServiceSwitches unit={unitId} services={services} busy={busy} onSet={setStatus} />}
 
       {one ? (
         <UnitEnergy g={one} utilities={utilities} services={services} now={now} busy={busy} onFitted={() => setFitting(one)} onUndo={() => undoGas(one.unit)} />
@@ -412,7 +469,7 @@ export function UtilitiesPanel({
               <div key={u.id} className="chip-3d grid grid-cols-[64px_1fr] items-center gap-2 rounded-xl border border-white/5 bg-black/25 px-3 py-2">
                 <b className="text-sm text-[var(--ink-1)]">{u.name}</b>
                 <div className="min-w-0 space-y-1.5 text-xs text-[var(--ink-2)]">
-                  <ServiceSwitches unit={u.id} services={services} busy={busy} onToggle={toggleService} compact />
+                  <ServiceSwitches unit={u.id} services={services} busy={busy} onSet={setStatus} compact />
                   {s && g ? (
                     <div className="flex items-center gap-2">
                       <span className="w-16 shrink-0">🔥 Gas {s.pct}%</span>
@@ -430,7 +487,7 @@ export function UtilitiesPanel({
                     </div>
                   ) : (
                     <div className="flex items-center justify-between gap-2 text-[var(--ink-3)]">
-                      <span>🔥 Gas: not in use now · available on request</span>
+                      <span>{services[u.id]?.gas === "on_request" ? "🔥 Gas: on request · no cylinder yet" : "🔥 Gas: not in use now · can be added any time"}</span>
                       <button
                         onClick={() => setFitting(startGas(u.id))}
                         className="shrink-0 rounded-full bg-white/5 px-2 py-0.5 text-[10px] font-semibold text-orange-200 ring-1 ring-white/10 hover:bg-orange-500/20"
@@ -442,12 +499,15 @@ export function UtilitiesPanel({
                   )}
                   <div className="flex flex-wrap justify-between gap-x-3">
                     {(["electricity", "water"] as const).map((k) =>
-                      services[u.id]?.[k] === false ? (
+                      services[u.id]?.[k] === "off" ? (
                         <span key={k} className="text-[var(--ink-3)]">
                           {KIND[k].icon} not in use now
                         </span>
                       ) : (
-                        <LatestLine key={k} e={latest(utilities.entries, u.id, k)} kind={k} />
+                        <span key={k}>
+                          <LatestLine e={latest(utilities.entries, u.id, k)} kind={k} />
+                          {services[u.id]?.[k] === "on_request" && <span className="ml-1 text-[10px] font-semibold text-sky-300">◐ on request</span>}
+                        </span>
                       ),
                     )}
                   </div>
@@ -514,28 +574,74 @@ function ServiceCheck({
   );
 }
 
-/** Checklist: which services this unit uses (electricity, water, gas). */
+/**
+ * Services checklist for one unit: each service is ● In use, ◐ On request
+ * (provided whenever a tenant needs it) or ○ Not in use now.
+ * Full size: three tick-boxes per service. Compact: a chip that cycles on tap.
+ */
 function ServiceSwitches({
   unit,
   services,
   busy,
-  onToggle,
+  onSet,
   compact = false,
 }: {
   unit: string;
   services: Services;
   busy: boolean;
-  onToggle: (unit: string, kind: UtilityKind, on: boolean) => void;
+  onSet: (unit: string, kind: UtilityKind, status: ServiceStatus) => void;
   compact?: boolean;
 }) {
-  return (
-    <div className={compact ? "" : "mb-3"}>
-      {!compact && <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services checklist · tick what this unit uses</div>}
-      <div className={`grid grid-cols-3 ${compact ? "gap-1.5" : "gap-2"}`}>
-        {(["electricity", "water", "gas"] as const).map((k) => (
-          <ServiceCheck key={k} kind={k} on={services[unit]?.[k] ?? false} busy={busy} compact={compact} onChange={(on) => onToggle(unit, k, on)} />
-        ))}
+  const icon: Record<ServiceStatus, string> = { in_use: "●", on_request: "◐", off: "○" };
+  if (compact) {
+    return (
+      <div className="grid grid-cols-3 gap-1.5">
+        {(["electricity", "water", "gas"] as const).map((k) => {
+          const st = services[unit]?.[k] ?? "off";
+          return (
+            <button
+              key={k}
+              disabled={busy}
+              onClick={() => onSet(unit, k, NEXT_STATUS[st])}
+              title={`${KIND[k].label}: ${STATUS[st].long}. Tap to change.`}
+              className={`chip-3d truncate rounded-lg border px-2 py-1 text-left text-[11px] font-semibold disabled:opacity-50 ${STATUS[st].chip}`}
+            >
+              {KIND[k].icon} {icon[st]} {STATUS[st].label}
+            </button>
+          );
+        })}
       </div>
+    );
+  }
+  return (
+    <div className="mb-3">
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services checklist · tick the status for each</div>
+      <div className="space-y-1.5">
+        {(["electricity", "water", "gas"] as const).map((k) => {
+          const st = services[unit]?.[k] ?? "off";
+          return (
+            <div key={k} className="chip-3d flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/25 px-3 py-2">
+              <span className="w-28 shrink-0 text-sm font-semibold text-[var(--ink-1)]">
+                {KIND[k].icon} {KIND[k].label}
+              </span>
+              <div className="grid min-w-0 flex-1 grid-cols-3 gap-1.5">
+                {(["in_use", "on_request", "off"] as const).map((s) => (
+                  <label
+                    key={s}
+                    className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-semibold transition ${
+                      st === s ? STATUS[s].active : "border-white/10 text-[var(--ink-3)] hover:text-white"
+                    } ${busy ? "opacity-50" : ""}`}
+                  >
+                    <input type="checkbox" className="h-4 w-4 accent-emerald-500" checked={st === s} disabled={busy || st === s} onChange={() => onSet(unit, k, s)} />
+                    {STATUS[s].label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mt-1.5 text-[11px] text-[var(--ink-3)]">On request = provided whenever a tenant needs it. Any service can be added to any unit at any time.</p>
     </div>
   );
 }
@@ -546,14 +652,16 @@ function ElecWater({ unit, utilities, services }: { unit: string; utilities: Uti
     <div className="grid grid-cols-2 gap-2">
       {(["electricity", "water"] as const).map((k) => {
         const e = latest(utilities.entries, unit, k);
-        const off = services[unit]?.[k] === false;
+        const st = services[unit]?.[k] ?? "in_use";
+        const off = st === "off";
         return (
           <div key={k} className={`chip-3d rounded-xl border p-3 text-sm ${off ? "border-dashed border-white/15 bg-black/15" : "border-white/5 bg-black/25"}`}>
             <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: KIND[k].color }}>
               {KIND[k].icon} {KIND[k].label}
             </div>
+            {st === "on_request" && <div className="mt-0.5 inline-block rounded-full border border-sky-400/40 bg-sky-500/15 px-2 text-[10px] font-semibold text-sky-200">◐ On request</div>}
             {off ? (
-              <div className="mt-1 text-xs text-[var(--ink-3)]">Not in use now · available on request</div>
+              <div className="mt-1 text-xs text-[var(--ink-3)]">Not in use now · can be added any time</div>
             ) : e ? (
               <>
                 <div className="mt-1 text-xl font-semibold tabular-nums text-[var(--ink-1)]">
@@ -578,11 +686,24 @@ function ElecWater({ unit, utilities, services }: { unit: string; utilities: Uti
 
 /** Unit page for a unit that does not use gas (available on request). */
 function NoGasUnit({ unitId, utilities, services, onStart }: { unitId: string; utilities: UtilitiesState; services: Services; onStart: () => void }) {
+  const onRequest = services[unitId]?.gas === "on_request";
   return (
     <div className="space-y-3">
-      <div className="chip-3d flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed border-amber-400/30 bg-amber-400/5 p-3 text-sm text-amber-100/90">
+      <div
+        className={`chip-3d flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-dashed p-3 text-sm ${
+          onRequest ? "border-sky-400/40 bg-sky-500/5 text-sky-100/90" : "border-amber-400/30 bg-amber-400/5 text-amber-100/90"
+        }`}
+      >
         <span>
-          🔥 <b>Gas: not in use now.</b> Available on request. When this unit starts using gas, record its first cylinder and the tracker appears here.
+          {onRequest ? (
+            <>
+              🔥 <b>Gas: on request.</b> Provided whenever a tenant needs it. Record the cylinder when you give one and the tracker appears here.
+            </>
+          ) : (
+            <>
+              🔥 <b>Gas: not in use now.</b> Can be added any time: record the first cylinder and the tracker appears here.
+            </>
+          )}
         </span>
         <button onClick={onStart} className="rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-4 py-1.5 text-sm font-semibold text-white shadow hover:brightness-110">
           🔥 Start gas for this unit

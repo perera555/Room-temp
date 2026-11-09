@@ -88,8 +88,14 @@ export type UtilityEntry = {
   note: string;
 };
 
-/** Which services each unit uses: unitId → { electricity, water, gas } (true = in use). */
-export type Services = Record<string, Record<UtilityKind, boolean>>;
+/**
+ * Service status per unit:
+ *  in_use     – the unit always uses it
+ *  on_request – provided only when a tenant/guest asks (temporary)
+ *  off        – not in use now (available on request)
+ */
+export type ServiceStatus = "in_use" | "on_request" | "off";
+export type Services = Record<string, Record<UtilityKind, ServiceStatus>>;
 
 export type UtilitiesState = {
   source: "live" | "demo";

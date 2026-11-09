@@ -10,6 +10,7 @@ import type {
   RoomSeries,
   SourceState,
   UnitData,
+  ServiceStatus,
   Services,
   UtilitiesState,
   UtilityEntry,
@@ -560,7 +561,7 @@ const gasUnits = () => {
  * gas for GAS_UNITS (Unit 1). Switches saved in the app override these.
  */
 async function getServices(): Promise<Services> {
-  let overrides: Record<string, Record<string, boolean>> = {};
+  let overrides: Record<string, Record<string, ServiceStatus>> = {};
   if (storeEnabled()) {
     try {
       overrides = await loadServiceOverrides();
@@ -573,9 +574,9 @@ async function getServices(): Promise<Services> {
     UNITS.map((u) => [
       u.id,
       {
-        electricity: overrides[u.id]?.electricity ?? true,
-        water: overrides[u.id]?.water ?? true,
-        gas: overrides[u.id]?.gas ?? gasIds.includes(u.id),
+        electricity: overrides[u.id]?.electricity ?? "in_use",
+        water: overrides[u.id]?.water ?? "in_use",
+        gas: overrides[u.id]?.gas ?? (gasIds.includes(u.id) ? "in_use" : "off"),
       },
     ]),
   );
@@ -591,8 +592,14 @@ async function getGas(now: number, services: Services): Promise<GasState[]> {
       console.error("[dashboard] gas history failed:", err);
     }
   }
-  // gas tracker for every unit whose gas service is in use
-  const units = UNITS.filter((u) => services[u.id]?.gas);
+  // gas tracker for units that use gas (always, or on request once a cylinder is recorded)
+  const configured = gasUnitIds();
+  const units = UNITS.filter((u) => {
+    const st = services[u.id]?.gas;
+    if (st === "in_use") return true;
+    if (st === "on_request") return (stored[u.id]?.length ?? 0) > 0 || configured.includes(u.id);
+    return false;
+  });
   return units.map((u, i) => {
     if (stored[u.id]?.length) return gasFrom(u, stored[u.id], "live", true);
     // e.g. GAS_LAST_CHANGED_UNIT2=2026-11-02 (or GAS_LAST_CHANGED for all)
