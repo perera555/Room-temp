@@ -4,10 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { DashboardData, Point, UnitData } from "@/lib/types";
 import { LineChart, StackedBars, Legend, type LineSeries } from "./charts";
-import { BookingCalendar, fmtRange, nights } from "./BookingCalendar";
+import { BookingCalendar, shortRoom } from "./BookingCalendar";
 import { InstallButton } from "./InstallButton";
 import { WeatherPanel, describe, compass } from "./Weather";
-import { Agenda, Occupancy, SERIES_COLORS, UnitCards, UnitHero, UnitTabs, dayKey, guestStatus } from "./Units";
+import { Agenda, AirbnbRooms, Occupancy, SERIES_COLORS, UnitCards, UnitHero, UnitTabs, airbnbRoomList, dayKey, guestStatus } from "./Units";
 
 const OUTSIDE = "#9085e9";
 const ELEC = "#3987e5";
@@ -236,9 +236,11 @@ function Body({
   const outsideNow = data.outside.temp.at(-1)?.v;
   const f = data.forecast;
 
-  const { staying, next } = guestStatus(data.bookings, unit?.id ?? null, todayKey);
-  const occupied = data.units.filter((u) => guestStatus(data.bookings, u.id, todayKey).staying).length;
+  const airbnbRooms = airbnbRoomList(data.units);
+  const roomsBooked = airbnbRooms.filter(({ unit: u, room }) => guestStatus(data.bookings, u.id, todayKey, room).staying).length;
+  const { next } = guestStatus(data.bookings, null, todayKey);
   const daysUntil = next ? Math.round((new Date(next.start + "T00:00:00").getTime() - new Date(todayKey + "T00:00:00").getTime()) / 86_400_000) : null;
+  const showBookings = unit ? unit.airbnbRooms.length > 0 : airbnbRooms.length > 0;
 
   const latestWeight = data.weight.at(-1)?.v;
   const weightMonthAgo = data.weight.find((p) => p.t >= (data.weight.at(-1)?.t ?? 0) - 30 * 86_400_000)?.v;
@@ -265,38 +267,36 @@ function Body({
           accent={`linear-gradient(90deg,${ELEC},${GAS})`}
           sub={`${data.energy.totals.elec} kWh electricity · ${data.energy.totals.gas} kWh gas`}
         />
-        {unit ? (
-          <Tile
-            label={staying ? "Guest staying now" : "Next guest"}
-            value={staying?.guest ?? next?.guest ?? "No bookings"}
-            accent="linear-gradient(90deg,#22c55e,#10b981)"
-            sub={
-              staying
-                ? `${fmtRange(staying)} · ${nights(staying)} nights`
-                : next
-                  ? `Arrives in ${daysUntil} day${daysUntil === 1 ? "" : "s"} · ${fmtRange(next)}`
-                  : "Calendar is clear"
-            }
-          />
-        ) : (
-          <Tile
-            label="Occupied tonight"
-            value={`${occupied} / ${data.units.length} units`}
-            accent="linear-gradient(90deg,#22c55e,#10b981)"
-            sub={next ? `Next arrival: ${next.guest} · ${data.units.find((u) => u.id === next.unit)?.name ?? ""} in ${daysUntil} day${daysUntil === 1 ? "" : "s"}` : "No upcoming arrivals"}
-          />
-        )}
+        <Tile
+          label="Airbnb rooms tonight"
+          value={`${roomsBooked} / ${airbnbRooms.length} booked`}
+          accent="linear-gradient(90deg,#ff385c,#10b981)"
+          sub={
+            next
+              ? `Next arrival: ${next.guest}${next.room ? ` · ${shortRoom(next.room)}` : ""} · ${daysUntil === 0 ? "today" : `in ${daysUntil} day${daysUntil === 1 ? "" : "s"}`}`
+              : "No upcoming arrivals"
+          }
+        />
       </div>
 
       {unit ? (
         <UnitHero unit={unit} bookings={data.bookings} todayKey={todayKey} index={data.units.findIndex((u) => u.id === unit.id)} />
       ) : (
-        <Occupancy units={data.units} bookings={data.bookings} now={now} />
+        <>
+          <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />
+          <Occupancy units={data.units} bookings={data.bookings} now={now} />
+        </>
       )}
+
+      {unit && unit.airbnbRooms.length > 0 && <Occupancy units={[unit]} bookings={data.bookings} now={now} />}
 
       <WeatherPanel forecast={data.forecast} location={data.location} demo={data.sources.forecast === "demo"} />
 
-      <div className="grid flex-1 grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_340px]">
+      <div
+        className={`grid flex-1 grid-cols-1 gap-4 ${
+          showBookings ? "xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_360px]" : "xl:grid-cols-2"
+        }`}
+      >
         <Panel
           title={unit ? `${unit.name} · temperatures` : "Temperatures · unit averages"}
           right={
@@ -390,17 +390,21 @@ function Body({
           </Panel>
         </div>
 
-        <section className="min-w-0 rounded-2xl bg-gradient-to-b from-emerald-700 via-emerald-800 to-emerald-900 p-4 shadow-[0_8px_30px_rgba(0,0,0,0.35)] ring-1 ring-emerald-400/20">
-          <header className="mb-3 flex items-center justify-between gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-100">{unit ? `${unit.name} · bookings` : "Guests · all units"}</h2>
-            <DemoBadge show={data.sources.calendar === "demo"} />
-          </header>
-          {unit ? (
-            <BookingCalendar bookings={data.bookings.filter((b) => b.unit === unit.id || b.unit == null)} now={now} />
-          ) : (
-            <Agenda units={data.units} bookings={data.bookings} todayKey={todayKey} />
-          )}
-        </section>
+        {showBookings && (
+          <section className="min-w-0 rounded-2xl bg-gradient-to-b from-emerald-700 via-emerald-800 to-emerald-900 p-4 shadow-[0_8px_30px_rgba(0,0,0,0.35)] ring-1 ring-emerald-400/20">
+            <header className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-100">
+                {unit ? `${unit.name} · room bookings` : "Airbnb guests"}
+              </h2>
+              <DemoBadge show={data.sources.calendar === "demo"} />
+            </header>
+            {unit ? (
+              <BookingCalendar bookings={data.bookings.filter((b) => b.unit === unit.id)} now={now} lanes={unit.airbnbRooms} />
+            ) : (
+              <Agenda units={data.units} bookings={data.bookings} todayKey={todayKey} />
+            )}
+          </section>
+        )}
       </div>
 
       {!unit && (

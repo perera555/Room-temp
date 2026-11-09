@@ -93,10 +93,20 @@ export default function GuidePage() {
           All settings are stored as <b>Environment Variables</b> in your Vercel project.
         </p>
         <p>
-          <b>Your property:</b> the top tabs switch between <b>All units</b> and <b>Unit 1–5</b>. Unit 1 is the main house (4 bedrooms,
-          living room, kitchen, bathroom). Units 2–5 are the four floors of the second building (each 3 bedrooms, 2 bathrooms, kitchen,
-          living room). “All units” shows every room’s live temperature, who is staying in each unit, and a 3-week occupancy chart.
-          Tap a unit card to open that unit. A <b>⚠ humidity</b> warning appears when a room reaches 70% or more (ventilate to avoid damp).
+          <b>Your property:</b> the top tabs switch between <b>All units</b> and <b>Unit 1–5</b>.
+        </p>
+        <ul>
+          <li><b>Unit 1</b>: main house (4 bedrooms, living room, kitchen, bathroom). Owner P.R. Perera &amp; H.M.S. Mallika.</li>
+          <li><b>Unit 2</b>: Building B, floor 1 (3 bedrooms, 2 bathrooms, kitchen, living room). Owner Dhanushka Perera.</li>
+          <li><b>Unit 3</b> <span className="text-[#ff8fa3]">(Airbnb)</span>: Building B, floor 2. Its <b>3 double bedrooms are let individually to Airbnb guests</b>. Owner Sasika Sasnka.</li>
+          <li><b>Unit 4</b>: Building B, floor 3 (3 bedrooms, 2 bathrooms, kitchen, living room). Owner Sachithra Madushan.</li>
+          <li><b>Unit 5</b>: Building B, floor 4. <b>Business hall</b>, one room and a bathroom.</li>
+        </ul>
+        <p>
+          Only <b>Unit 3</b> shows bookings and guests. The other units show temperatures only. “All units” starts with Unit 3’s three
+          guest rooms (who is in each room tonight, check-ins and check-outs), then a 3-week room occupancy chart, weather, charts,
+          and at the bottom every unit’s live room temperatures. A <b>⚠ humidity</b> warning appears when a room reaches 70% or more
+          (ventilate to avoid damp). Owner names and rooms are set in <code>lib/units.ts</code>.
         </p>
         <p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
           <b>Does it need outside help?</b> No. The app runs by itself on Vercel. Weather works with no setup. Bookings need only your
@@ -135,13 +145,14 @@ export default function GuidePage() {
           <li>Copy the link.</li>
         </ol>
         <p>
-          Then add a Vercel environment variable called <code>CALENDAR_ICAL_URLS</code>. Put each link after a <b>unit label</b> and a
-          <code>|</code>, separated by commas, so the app knows which unit each booking belongs to:
+          Bookings are for <b>Unit 3’s three double bedrooms</b>, each its own Airbnb listing. Add a Vercel environment variable called
+          <code>CALENDAR_ICAL_URLS</code> with each room’s link after a <b>room label</b> and a <code>|</code>, separated by commas:
         </p>
-        <p className="break-all"><code>Unit 1|https://…unit1.ics, Unit 2|https://…unit2.ics, Unit 3|https://…unit3.ics, Unit 4|https://…unit4.ics, Unit 5|https://…unit5.ics</code></p>
+        <p className="break-all"><code>Bedroom 1|https://…room1.ics, Bedroom 2|https://…room2.ics, Bedroom 3|https://…room3.ics</code></p>
         <p>
-          <b>Using one Google Calendar for everything?</b> That works too. Put the unit in the event title, for example
-          <code>Faye – Unit 2</code>. The app shows “Faye” in Unit 2.
+          <b>Using one Google Calendar for all three rooms?</b> That works too. Put the room in the event title, for example
+          <code>Faye – Bed 1</code> or <code>Alberto (Bedroom 3)</code>. The app shows “Faye” in Bedroom 1. Bookings with no room are
+          shown across all three rooms.
         </p>
         <p>
           <b>No admin account is needed.</b> You paste the link once. After that the app re-reads the calendar automatically every
@@ -218,7 +229,8 @@ Content-Type: application/json
             ["LOCATION_NAME", "Name shown in the header", "Brighton"],
             ["LATITUDE / LONGITUDE", "Location for outside weather & forecast", "50.82 / -0.14"],
             ["WIND_UNIT", "Wind speed unit: mph, kmh, ms or kn", "mph"],
-            ["CALENDAR_ICAL_URLS", "Google/Airbnb iCal links with unit labels, comma separated", "Unit 1|https://…/basic.ics, Unit 2|https://…"],
+            ["CALENDAR_ICAL_URLS", "Google/Airbnb iCal links for Unit 3's rooms, comma separated", "Bedroom 1|https://…, Bedroom 2|https://…"],
+            ["AIRBNB_UNITS", "Which unit(s) are let on Airbnb (default 3)", "3"],
             ["SENSOR_API_KEY", "Secret word sensors use to send readings", "blue-river-7731"],
             ["KV_REST_API_URL / KV_REST_API_TOKEN", "Added automatically when you connect Upstash Redis", "(automatic)"],
             ["SENSOR_FEED_URL", "Alternative: one JSON file with all readings", "https://pi.example.com/rooms.json"],

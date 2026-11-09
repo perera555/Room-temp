@@ -10,7 +10,7 @@ import type {
   SourceState,
   UnitData,
 } from "./types";
-import { UNITS, unitIdFrom } from "./units";
+import { UNITS, airbnbRoomsFor, airbnbUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
 import { loadReadings, storeEnabled } from "./store";
 
 const HOUR = 3_600_000;
@@ -55,6 +55,7 @@ function roomProfile(name: string) {
   const n = name.toLowerCase();
   if (n.includes("bath")) return { base: 19.0, hum: 64, bath: true, kitchen: false };
   if (n.includes("kitchen")) return { base: 20.2, hum: 55, bath: false, kitchen: true };
+  if (n.includes("hall") || n.includes("business")) return { base: 20.8, hum: 46, bath: false, kitchen: false };
   if (n.includes("living")) return { base: 20.6, hum: 50, bath: false, kitchen: false };
   return { base: 19.2, hum: 52, bath: false, kitchen: false };
 }
@@ -67,6 +68,9 @@ function demoUnits(now: number): UnitData[] {
     id: u.id,
     name: u.name,
     note: u.note,
+    airbnbRooms: [],
+    owner: null,
+    usage: null,
     rooms: u.rooms.map((name, ri) => {
       const p = roomProfile(name);
       const seed = ui * 20 + ri + 1;
@@ -127,11 +131,14 @@ async function liveUnits(url: string, now: number): Promise<UnitData[]> {
     id: u.id,
     name: u.name,
     note: u.note,
+    airbnbRooms: [],
+    owner: null,
+    usage: null,
     rooms: (grouped.get(u.id) ?? []).map((r) => toSeries(r, u.id)),
   }));
   const extra = [...grouped.entries()]
     .filter(([id]) => !UNITS.some((u) => u.id === id))
-    .map(([id, rooms]) => ({ id, name: id, note: "", rooms: rooms.map((r) => toSeries(r, id)) }));
+    .map(([id, rooms]) => ({ id, name: id, note: "", airbnbRooms: [], owner: null, usage: null, rooms: rooms.map((r) => toSeries(r, id)) }));
   return [...known, ...extra];
 }
 
@@ -150,6 +157,9 @@ async function storedUnits(now: number): Promise<UnitData[]> {
       id: u.id,
       name: u.name,
       note: u.note,
+    airbnbRooms: [],
+    owner: null,
+    usage: null,
       rooms: mine
         .sort((a, b) => order(a.room) - order(b.room))
         .map((r) => {
@@ -451,33 +461,35 @@ function addDays(day: string, n: number) {
 
 function demoBookings(now: number): Booking[] {
   const today = new Date(now).toISOString().slice(0, 10);
+  const unit = airbnbUnitIds()[0] ?? "unit3";
   const plan: Record<string, [string, number, number][]> = {
-    unit1: [["Faye", -7, -4], ["Alberto", -3, 2], ["Calum", 15, 18], ["Marta & Jon", 22, 27]],
-    unit2: [["Kenji", -2, 4], ["Sophie", 6, 9], ["The Okafors", 12, 19]],
-    unit3: [["Lena", 1, 3], ["Diego", 4, 11], ["Hannah", 20, 23]],
-    unit4: [["Rob & Amy", -5, 1], ["Priya", 5, 8], ["Tomás", 9, 14]],
-    unit5: [["Noah", -1, 6], ["Grace", 10, 13], ["Ibrahim", 16, 24]],
+    "Bedroom 1": [["Faye", -7, -4], ["Alberto", -3, 2], ["Calum", 6, 10], ["Marta", 15, 20]],
+    "Bedroom 2": [["Kenji", -2, 4], ["Sophie", 5, 8], ["Lena", 11, 18]],
+    "Bedroom 3": [["Priya", 1, 3], ["Diego", 4, 11], ["Hannah", 13, 16], ["Tomás", 19, 23]],
   };
-  return Object.entries(plan).flatMap(([unit, rows]) =>
+  return Object.entries(plan).flatMap(([room, rows]) =>
     rows.map(([guest, s, e], i) => ({
-      id: `demo-${unit}-${i}`,
+      id: `demo-${room}-${i}`,
       guest,
       start: addDays(today, s),
       end: addDays(today, e),
       source: "Demo",
       unit,
+      room,
     })),
   );
 }
 
-/** Pulls "Unit 2" out of an event title, e.g. "Faye – Unit 2" → guest "Faye", unit "unit2". */
+/**
+ * Works out unit + bedroom from the event title or the calendar label,
+ * e.g. title "Faye – Bed 1" or label "Unit 2 Bedroom 1".
+ */
 function tagUnit(b: Booking, calendarLabel: string): Booking {
-  const fromTitle = unitIdFrom(b.guest);
-  const unit = fromTitle ?? unitIdFrom(calendarLabel);
-  const guest = fromTitle
-    ? b.guest.replace(/\(?\b(?:unit|flat|apt|apartment|u)\s*#?\s*\d+\b\)?/i, "").replace(/^[\s\-–—:|,]+|[\s\-–—:|,]+$/g, "") || "Guest"
-    : b.guest;
-  return { ...b, guest, unit };
+  const airbnb = airbnbUnitIds();
+  const unit =
+    unitIdFrom(b.guest) ?? unitIdFrom(calendarLabel) ?? (airbnb.length === 1 ? airbnb[0] : null);
+  const room = roomFrom(b.guest) ?? roomFrom(calendarLabel);
+  return { ...b, guest: stripTags(b.guest), unit, room };
 }
 
 async function liveBookings(spec: string): Promise<Booking[]> {
@@ -504,7 +516,7 @@ async function liveBookings(spec: string): Promise<Booking[]> {
     .flatMap((r) => r.value)
     .filter((b) => {
       // Same unit + same dates in two calendars (e.g. Google and Airbnb) = one booking.
-      const k = `${b.unit ?? "-"}|${b.start}|${b.end}`;
+      const k = `${b.unit ?? "-"}|${b.room ?? "-"}|${b.start}|${b.end}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
@@ -564,7 +576,10 @@ export async function getDashboardData(): Promise<DashboardData> {
       weight: weightSrc,
       calendar: calSrc,
     },
-    units,
+    units: units.map((u) => {
+      const def = UNITS.find((d) => d.id === u.id);
+      return { ...u, owner: def?.owner ?? null, usage: def?.usage ?? null, airbnbRooms: airbnbRoomsFor(u.id) };
+    }),
     outside,
     forecast,
     energy,

@@ -1,7 +1,7 @@
 "use client";
 
-import type { Booking, UnitData } from "@/lib/types";
-import { fmtRange, nights } from "./BookingCalendar";
+import type { Booking, RoomSeries, UnitData } from "@/lib/types";
+import { fmtRange, nights, shortRoom } from "./BookingCalendar";
 
 export const SERIES_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#e66767"];
 
@@ -9,11 +9,21 @@ export function dayKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function guestStatus(bookings: Booking[], unit: string | null, todayKey: string) {
-  const mine = unit ? bookings.filter((b) => b.unit === unit) : bookings;
+const fmtDay = (k: string) => new Date(k + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+
+/** Who is in a unit (or one bedroom) tonight, and who arrives next. Whole-unit bookings (room = null) count for every room. */
+export function guestStatus(bookings: Booking[], unit: string | null, todayKey: string, room: string | null = null) {
+  const mine = bookings.filter((b) => (!unit || b.unit === unit) && (!room || b.room === room || b.room == null));
   const staying = mine.find((b) => b.start <= todayKey && b.end > todayKey) ?? null;
   const next = mine.filter((b) => b.start > todayKey).sort((a, b) => a.start.localeCompare(b.start))[0] ?? null;
-  return { staying, next };
+  const checkIn = mine.find((b) => b.start === todayKey) ?? null;
+  const checkOut = mine.find((b) => b.end === todayKey) ?? null;
+  return { staying, next, checkIn, checkOut };
+}
+
+/** All Airbnb bedrooms across the property, e.g. [{unit, room:"Bedroom 1"}, …]. */
+export function airbnbRoomList(units: UnitData[]) {
+  return units.flatMap((u) => u.airbnbRooms.map((room) => ({ unit: u, room })));
 }
 
 function comfort(t: number) {
@@ -23,8 +33,16 @@ function comfort(t: number) {
   return { label: "Warm", dot: "#fb923c" };
 }
 
+function AirbnbBadge({ className = "" }: { className?: string }) {
+  return (
+    <span className={`rounded-full bg-[#ff385c]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#ff8fa3] ring-1 ring-[#ff385c]/30 ${className}`}>
+      Airbnb
+    </span>
+  );
+}
+
 export function UnitTabs({ units, value, onChange }: { units: UnitData[]; value: string; onChange: (id: string) => void }) {
-  const tabs = [{ id: "all", name: "All units" }, ...units.map((u) => ({ id: u.id, name: u.name }))];
+  const tabs = [{ id: "all", name: "All units", airbnb: false }, ...units.map((u) => ({ id: u.id, name: u.name, airbnb: u.airbnbRooms.length > 0 }))];
   return (
     <nav className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1" aria-label="Units">
       {tabs.map((t) => (
@@ -32,114 +50,26 @@ export function UnitTabs({ units, value, onChange }: { units: UnitData[]; value:
           key={t.id}
           onClick={() => onChange(t.id)}
           aria-pressed={value === t.id}
-          className={`whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
+          className={`flex items-center gap-2 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition ${
             value === t.id
               ? "bg-gradient-to-r from-sky-500 to-emerald-500 text-white shadow-lg"
               : "border border-[var(--border)] bg-[var(--surface)] text-[var(--ink-2)] hover:text-white"
           }`}
         >
           {t.name}
+          {t.airbnb && <span className="h-1.5 w-1.5 rounded-full bg-[#ff385c]" title="Airbnb" />}
         </button>
       ))}
     </nav>
   );
 }
 
-export function UnitCards({
-  units,
-  bookings,
-  todayKey,
-  onOpen,
-}: {
-  units: UnitData[];
-  bookings: Booking[];
-  todayKey: string;
-  onOpen: (id: string) => void;
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-      {units.map((u, ui) => {
-        const temps = u.rooms.map((r) => r.temp.at(-1)?.v).filter((v): v is number => v != null);
-        const avg = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
-        const { staying, next } = guestStatus(bookings, u.id, todayKey);
-        return (
-          <button
-            key={u.id}
-            onClick={() => onOpen(u.id)}
-            className="group relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0)_35%),var(--surface)] p-4 text-left shadow-[0_10px_40px_rgba(0,0,0,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-400/40"
-          >
-            <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: SERIES_COLORS[ui % SERIES_COLORS.length] }} />
-            <span
-              className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full opacity-20 blur-2xl transition group-hover:opacity-35"
-              style={{ background: SERIES_COLORS[ui % SERIES_COLORS.length] }}
-            />
-            <div className="relative flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-lg font-semibold text-[var(--ink-1)]">{u.name}</div>
-                <div className="truncate text-xs text-[var(--ink-3)]">{u.note}</div>
-              </div>
-              <div className="text-right">
-                <div className="text-2xl font-semibold tabular-nums text-[var(--ink-1)]">{avg != null ? `${avg.toFixed(1)}°` : "—"}</div>
-                <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)]">average</div>
-              </div>
-            </div>
-
-            <div
-              className={`mt-3 rounded-xl px-3 py-2 text-xs ${
-                staying ? "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-400/30" : "bg-black/25 text-[var(--ink-2)]"
-              }`}
-            >
-              {staying ? (
-                <>
-                  <b className="text-emerald-100">● {staying.guest}</b> · until{" "}
-                  {new Date(staying.end + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}
-                </>
-              ) : next ? (
-                <>
-                  ○ Empty · next <b className="text-[var(--ink-1)]">{next.guest}</b>{" "}
-                  {new Date(next.start + "T12:00:00").toLocaleDateString([], { day: "numeric", month: "short" })}
-                </>
-              ) : (
-                "○ Empty · no upcoming bookings"
-              )}
-            </div>
-
-            <ul className="mt-3 grid grid-cols-1 gap-1">
-              {u.rooms.length === 0 && <li className="text-xs text-[var(--ink-3)]">No sensors reporting yet</li>}
-              {u.rooms.map((r) => {
-                const t = r.temp.at(-1)?.v;
-                const h = r.humidity.at(-1)?.v;
-                const c = t != null ? comfort(t) : null;
-                return (
-                  <li key={r.key} className="flex items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-[13px] odd:bg-white/[0.025]">
-                    <span className="flex min-w-0 items-center gap-2 text-[var(--ink-2)]">
-                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: c?.dot ?? "#555" }} title={c?.label} />
-                      <span className="truncate">{r.label}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2 tabular-nums">
-                      {h != null && (
-                        <span className={h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"} title={h >= 70 ? "High humidity — ventilate" : "Humidity"}>
-                          {h >= 70 ? "⚠ " : ""}
-                          {Math.round(h)}%
-                        </span>
-                      )}
-                      <b className="w-12 text-right text-[var(--ink-1)]">{t != null ? `${t.toFixed(1)}°` : "—"}</b>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-            <div className="mt-auto pt-3 text-right text-xs text-sky-300 opacity-70 group-hover:opacity-100">Open {u.name} →</div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function RoomIcon({ name }: { name: string }) {
+/* ------------------------------------------------------------------ */
+/* Small pieces                                                        */
+/* ------------------------------------------------------------------ */
+export function RoomIcon({ name, size = 20 }: { name: string; size?: number }) {
   const n = name.toLowerCase();
-  const p = { width: 20, height: 20, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  const p = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
   if (n.includes("bath"))
     return (
       <svg {...p}>
@@ -152,15 +82,22 @@ function RoomIcon({ name }: { name: string }) {
         <path d="M4 10h16v4a6 6 0 0 1-6 6h-4a6 6 0 0 1-6-6v-4ZM2 10h20M9 6c0-1 1-1 1-2M14 6c0-1 1-1 1-2" />
       </svg>
     );
+  if (n.includes("hall") || n.includes("office") || n.includes("business"))
+    return (
+      <svg {...p}>
+        <path d="M3 21h18M5 21V8l7-4 7 4v13M9 21v-5h6v5M8.5 11h1M14.5 11h1" />
+      </svg>
+    );
   if (n.includes("living"))
     return (
       <svg {...p}>
         <path d="M5 11V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3M3 13a2 2 0 0 1 4 0v2h10v-2a2 2 0 0 1 4 0v5H3v-5ZM6 18v2M18 18v2" />
       </svg>
     );
+  // double bed
   return (
     <svg {...p}>
-      <path d="M3 18V7M3 14h18v4M21 14v-2a3 3 0 0 0-3-3h-7v5M7 11.5a1.5 1.5 0 1 0 0-.01" />
+      <path d="M3 19v-6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v6M3 16h18M5 11V7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4M8 11V9.5a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1V11M12.5 11V9.5a1 1 0 0 1 1-1H15a1 1 0 0 1 1 1V11" />
     </svg>
   );
 }
@@ -190,28 +127,276 @@ function Sparkline({ points, color }: { points: { t: number; v: number }[]; colo
   );
 }
 
-/** Big banner + room cards for a single unit. */
+/** Guest line for an Airbnb bedroom. */
+function GuestLine({ status, compact = false }: { status: ReturnType<typeof guestStatus>; compact?: boolean }) {
+  const { staying, next, checkIn, checkOut } = status;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      {staying ? (
+        <span className="truncate rounded-full bg-emerald-400/20 px-2 py-0.5 font-semibold text-emerald-200 ring-1 ring-emerald-400/30">
+          ● {staying.guest}
+          {!compact && <span className="font-normal text-emerald-100/80"> · out {fmtDay(staying.end)}</span>}
+        </span>
+      ) : (
+        <span className="rounded-full bg-white/5 px-2 py-0.5 text-[var(--ink-3)] ring-1 ring-white/10">
+          ○ Vacant{next && !compact ? ` · next ${next.guest} ${fmtDay(next.start)}` : ""}
+        </span>
+      )}
+      {checkIn && <span className="rounded-full bg-sky-400/20 px-2 py-0.5 font-semibold text-sky-200">↘ Check-in today</span>}
+      {checkOut && <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-semibold text-amber-200">🧹 Check-out today</span>}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Airbnb bedrooms (overview hero)                                     */
+/* ------------------------------------------------------------------ */
+export function AirbnbRooms({ units, bookings, todayKey, onOpen }: { units: UnitData[]; bookings: Booking[]; todayKey: string; onOpen: (id: string) => void }) {
+  const list = airbnbRoomList(units);
+  if (!list.length) return null;
+  const booked = list.filter(({ unit, room }) => guestStatus(bookings, unit.id, todayKey, room).staying).length;
+  const multiUnit = new Set(list.map((l) => l.unit.id)).size > 1;
+
+  return (
+    <section
+      className="relative overflow-hidden rounded-3xl border border-white/10 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.5)]"
+      style={{ background: "radial-gradient(800px 260px at 0% 0%, rgba(255,56,92,0.20), transparent 60%), radial-gradient(700px 300px at 100% 100%, rgba(16,185,129,0.18), transparent 60%), #121417" }}
+    >
+      <header className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <AirbnbBadge />
+            <span className="text-xs uppercase tracking-[0.16em] text-white/60">{[...new Set(list.map((l) => l.unit.name))].join(", ")} · rooms let individually</span>
+          </div>
+          <h2 className="mt-1 text-2xl font-semibold tracking-tight text-white sm:text-3xl">Guest rooms tonight</h2>
+        </div>
+        <div className="text-right">
+          <div className="text-4xl font-semibold tabular-nums text-white">
+            {booked}
+            <span className="text-white/40">/{list.length}</span>
+          </div>
+          <div className="text-xs uppercase tracking-wider text-white/60">rooms booked</div>
+        </div>
+      </header>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        {list.map(({ unit, room }, i) => {
+          const series = unit.rooms.find((r) => r.label === room);
+          const t = series?.temp.at(-1)?.v;
+          const h = series?.humidity.at(-1)?.v;
+          const st = guestStatus(bookings, unit.id, todayKey, room);
+          const color = SERIES_COLORS[i % SERIES_COLORS.length];
+          return (
+            <button
+              key={`${unit.id}-${room}`}
+              onClick={() => onOpen(unit.id)}
+              className={`group relative min-w-0 overflow-hidden rounded-2xl p-4 text-left ring-1 transition hover:-translate-y-0.5 ${
+                st.staying ? "bg-emerald-950/40 ring-emerald-400/30" : "bg-black/30 ring-white/10"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-11 w-11 place-items-center rounded-2xl" style={{ background: `${color}26`, color }}>
+                    <RoomIcon name={room} size={24} />
+                  </span>
+                  <div>
+                    <div className="text-lg font-semibold text-white">
+                      {multiUnit ? `${unit.name} · ` : ""}
+                      {room}
+                    </div>
+                    <div className="text-xs text-white/55">Double bed</div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-3xl font-semibold tabular-nums text-white">{t != null ? `${t.toFixed(1)}°` : "—"}</div>
+                  {h != null && <div className={`text-xs tabular-nums ${h >= 70 ? "font-semibold text-amber-300" : "text-white/55"}`}>{h >= 70 ? "⚠ " : "💧 "}{Math.round(h)}%</div>}
+                </div>
+              </div>
+              <div className="mt-3 rounded-xl bg-white/5 px-3 py-2.5">
+                {st.staying ? (
+                  <>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Occupied</div>
+                    <div className="truncate text-lg font-semibold text-white">{st.staying.guest}</div>
+                    <div className="text-xs text-white/65">
+                      Check-out {fmtDay(st.staying.end)} · {nights(st.staying)} nights
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Vacant tonight</div>
+                    <div className="truncate text-lg font-semibold text-white/85">{st.next ? st.next.guest : "No upcoming guest"}</div>
+                    <div className="text-xs text-white/55">{st.next ? `Arrives ${fmtDay(st.next.start)} · ${nights(st.next)} nights` : "Room is free"}</div>
+                  </>
+                )}
+              </div>
+              {(st.checkIn || st.checkOut) && (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                  {st.checkOut && <span className="rounded-full bg-amber-400/20 px-2 py-0.5 font-semibold text-amber-200">🧹 {st.checkOut.guest} leaves today: clean room</span>}
+                  {st.checkIn && <span className="rounded-full bg-sky-400/20 px-2 py-0.5 font-semibold text-sky-200">↘ {st.checkIn.guest} arrives today</span>}
+                </div>
+              )}
+              {series && <div className="mt-2"><Sparkline points={series.temp} color={color} /></div>}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Compact unit cards (overview, bottom)                               */
+/* ------------------------------------------------------------------ */
+export function UnitCards({ units, bookings, todayKey, onOpen }: { units: UnitData[]; bookings: Booking[]; todayKey: string; onOpen: (id: string) => void }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+      {units.map((u, ui) => {
+        const temps = u.rooms.map((r) => r.temp.at(-1)?.v).filter((v): v is number => v != null);
+        const avg = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
+        const color = SERIES_COLORS[ui % SERIES_COLORS.length];
+        const isAirbnb = u.airbnbRooms.length > 0;
+        return (
+          <button
+            key={u.id}
+            onClick={() => onOpen(u.id)}
+            className="group relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0)_35%),var(--surface)] p-4 text-left shadow-[0_10px_40px_rgba(0,0,0,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-400/40"
+          >
+            <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: color }} />
+            <span className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full opacity-20 blur-2xl transition group-hover:opacity-35" style={{ background: color }} />
+            <div className="relative flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-lg font-semibold text-[var(--ink-1)]">
+                  {u.name} {isAirbnb && <AirbnbBadge />}
+                </div>
+                <div className="truncate text-xs text-[var(--ink-3)]">{u.note}</div>
+                {u.owner && <div className="truncate text-xs text-[var(--ink-2)]">Owner · {u.owner}</div>}
+                {u.usage && !isAirbnb && <div className="mt-1 inline-block rounded-full bg-sky-400/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-200">{u.usage}</div>}
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-semibold tabular-nums text-[var(--ink-1)]">{avg != null ? `${avg.toFixed(1)}°` : "—"}</div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)]">average</div>
+              </div>
+            </div>
+
+            <ul className="relative mt-3 grid grid-cols-1 gap-1">
+              {u.rooms.length === 0 && <li className="text-xs text-[var(--ink-3)]">No sensors reporting yet</li>}
+              {u.rooms.map((r) => {
+                const t = r.temp.at(-1)?.v;
+                const h = r.humidity.at(-1)?.v;
+                const c = t != null ? comfort(t) : null;
+                const let_ = u.airbnbRooms.includes(r.label);
+                const st = let_ ? guestStatus(bookings, u.id, todayKey, r.label) : null;
+                return (
+                  <li key={r.key} className="flex items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-[13px] odd:bg-white/[0.025]">
+                    <span className="flex min-w-0 items-center gap-2 text-[var(--ink-2)]">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: c?.dot ?? "#555" }} title={c?.label} />
+                      <span className="truncate">{r.label}</span>
+                      {st && (
+                        <span className={`truncate text-[11px] ${st.staying ? "font-semibold text-emerald-300" : "text-[var(--ink-3)]"}`}>
+                          {st.staying ? st.staying.guest : "vacant"}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                      {h != null && (
+                        <span className={h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"} title={h >= 70 ? "High humidity: ventilate" : "Humidity"}>
+                          {h >= 70 ? "⚠ " : ""}
+                          {Math.round(h)}%
+                        </span>
+                      )}
+                      <b className="w-12 text-right text-[var(--ink-1)]">{t != null ? `${t.toFixed(1)}°` : "—"}</b>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="relative mt-auto pt-3 text-right text-xs text-sky-300 opacity-70 group-hover:opacity-100">Open {u.name} →</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Unit page: banner + room tiles                                      */
+/* ------------------------------------------------------------------ */
+function RoomTile({ r, i, unit, bookings, todayKey }: { r: RoomSeries; i: number; unit: UnitData; bookings: Booking[]; todayKey: string }) {
+  const t = r.temp.at(-1)?.v;
+  const h = r.humidity.at(-1)?.v;
+  const c = t != null ? comfort(t) : null;
+  const vals = r.temp.map((p) => p.v);
+  const lo = vals.length ? Math.min(...vals) : null;
+  const hi = vals.length ? Math.max(...vals) : null;
+  const sc = SERIES_COLORS[i % SERIES_COLORS.length];
+  const let_ = unit.airbnbRooms.includes(r.label);
+  return (
+    <div className="group relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0)_45%),var(--surface)] p-3.5 shadow-[0_10px_30px_rgba(0,0,0,0.4)] transition hover:-translate-y-0.5 hover:border-white/20">
+      <div className="flex items-center justify-between gap-2">
+        <span className="grid h-8 w-8 place-items-center rounded-xl" style={{ background: `${sc}26`, color: sc }}>
+          <RoomIcon name={r.label} />
+        </span>
+        {let_ ? (
+          <AirbnbBadge />
+        ) : (
+          c && (
+            <span className="flex items-center gap-1 rounded-full bg-black/30 px-2 py-0.5 text-[10px] font-medium text-[var(--ink-2)]">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.dot }} />
+              {c.label}
+            </span>
+          )
+        )}
+      </div>
+      <div className="mt-2 truncate text-sm font-medium text-[var(--ink-2)]">
+        {r.label}
+        {let_ && <span className="text-[var(--ink-3)]"> · double</span>}
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-semibold tabular-nums tracking-tight text-[var(--ink-1)]">{t != null ? t.toFixed(1) : "—"}°</span>
+        {h != null && (
+          <span className={`text-sm tabular-nums ${h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"}`}>
+            {h >= 70 ? "⚠ " : "💧"}
+            {Math.round(h)}%
+          </span>
+        )}
+      </div>
+      {let_ && (
+        <div className="mt-1">
+          <GuestLine status={guestStatus(bookings, unit.id, todayKey, r.label)} compact />
+        </div>
+      )}
+      <div className="mt-auto">
+        <Sparkline points={r.temp} color={sc} />
+        {lo != null && hi != null && (
+          <div className="flex justify-between text-[10px] tabular-nums text-[var(--ink-3)]">
+            <span>24h low {lo.toFixed(1)}°</span>
+            <span>high {hi.toFixed(1)}°</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; bookings: Booking[]; todayKey: string; index: number }) {
   const color = SERIES_COLORS[index % SERIES_COLORS.length];
   const temps = unit.rooms.map((r) => r.temp.at(-1)?.v).filter((v): v is number => v != null);
   const avg = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
-  const warmest = unit.rooms.reduce<{ label: string; v: number } | null>((m, r) => {
-    const v = r.temp.at(-1)?.v;
-    return v != null && (!m || v > m.v) ? { label: r.label, v } : m;
-  }, null);
-  const coolest = unit.rooms.reduce<{ label: string; v: number } | null>((m, r) => {
-    const v = r.temp.at(-1)?.v;
-    return v != null && (!m || v < m.v) ? { label: r.label, v } : m;
-  }, null);
+  const pick = (cmp: (a: number, b: number) => boolean) =>
+    unit.rooms.reduce<{ label: string; v: number } | null>((m, r) => {
+      const v = r.temp.at(-1)?.v;
+      return v != null && (!m || cmp(v, m.v)) ? { label: r.label, v } : m;
+    }, null);
+  const warmest = pick((a, b) => a > b);
+  const coolest = pick((a, b) => a < b);
   const damp = unit.rooms.filter((r) => (r.humidity.at(-1)?.v ?? 0) >= 70).length;
-  const { staying, next } = guestStatus(bookings, unit.id, todayKey);
-  const fmt = (k: string) => new Date(k + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const isAirbnb = unit.airbnbRooms.length > 0;
+  const booked = unit.airbnbRooms.filter((room) => guestStatus(bookings, unit.id, todayKey, room).staying).length;
 
   return (
     <section className="flex flex-col gap-3">
       <div
         className="relative overflow-hidden rounded-3xl border border-white/10 p-5 shadow-[0_20px_60px_rgba(0,0,0,0.5)] sm:p-7"
-        style={{ background: `radial-gradient(900px 300px at 0% 0%, ${color}55, transparent 60%), radial-gradient(600px 300px at 100% 100%, #10b98133, transparent 60%), #121417` }}
+        style={{ background: `radial-gradient(900px 300px at 0% 0%, ${color}55, transparent 60%), radial-gradient(600px 300px at 100% 100%, ${isAirbnb ? "#ff385c33" : "#10b98133"}, transparent 60%), #121417` }}
       >
         <div className="relative flex flex-wrap items-end justify-between gap-6">
           <div className="min-w-0">
@@ -219,26 +404,42 @@ export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; 
               <span className="h-2 w-2 rounded-full" style={{ background: color }} />
               {unit.note}
             </div>
-            <h2 className="mt-1 text-4xl font-semibold tracking-tight text-white sm:text-5xl">{unit.name}</h2>
+            <h2 className="mt-1 flex items-center gap-3 text-4xl font-semibold tracking-tight text-white sm:text-5xl">
+              {unit.name} {isAirbnb && <AirbnbBadge className="text-xs" />}
+            </h2>
+            {unit.owner && (
+              <div className="mt-2 text-sm text-white/80">
+                Owner · <b className="text-white">{unit.owner}</b>
+              </div>
+            )}
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              {unit.usage && <span className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white">{unit.usage}</span>}
               <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">{unit.rooms.length} rooms</span>
+              {isAirbnb && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">{unit.airbnbRooms.length} double bedrooms on Airbnb</span>}
               {warmest && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">▲ Warmest: {warmest.label} {warmest.v.toFixed(1)}°</span>}
               {coolest && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">▼ Coolest: {coolest.label} {coolest.v.toFixed(1)}°</span>}
               {damp > 0 && <span className="rounded-full bg-amber-400/20 px-3 py-1 font-semibold text-amber-200">⚠ {damp} damp room{damp > 1 ? "s" : ""}</span>}
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-6">
-            <div
-              className={`min-w-56 rounded-2xl px-4 py-3 ${
-                staying ? "bg-gradient-to-br from-emerald-300 to-emerald-500 text-emerald-950 shadow-lg shadow-emerald-900/40" : "bg-white/10 text-white"
-              }`}
-            >
-              <div className="text-[10px] font-semibold uppercase tracking-wider opacity-75">{staying ? "Guest staying now" : next ? "Next guest" : "Bookings"}</div>
-              <div className="truncate text-xl font-semibold">{staying?.guest ?? next?.guest ?? "No upcoming guests"}</div>
-              <div className="text-xs opacity-80">
-                {staying ? `Checks out ${fmt(staying.end)}` : next ? `Arrives ${fmt(next.start)} · ${nights(next)} nights` : "Calendar is clear"}
+            {isAirbnb && (
+              <div className="min-w-60 rounded-2xl bg-white/10 px-4 py-3 text-white">
+                <div className="text-[10px] font-semibold uppercase tracking-wider opacity-75">
+                  Tonight · {booked}/{unit.airbnbRooms.length} rooms booked
+                </div>
+                <ul className="mt-1 space-y-1">
+                  {unit.airbnbRooms.map((room) => {
+                    const st = guestStatus(bookings, unit.id, todayKey, room);
+                    return (
+                      <li key={room} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="text-white/70">{shortRoom(room)}</span>
+                        <b className={st.staying ? "text-emerald-300" : "font-normal text-white/50"}>{st.staying ? st.staying.guest : "Vacant"}</b>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
-            </div>
+            )}
             <div className="text-right">
               <div className="text-6xl font-semibold leading-none tracking-tight text-white tabular-nums sm:text-7xl">{avg != null ? avg.toFixed(1) : "—"}°</div>
               <div className="mt-1 text-xs uppercase tracking-wider text-white/60">Average indoor</div>
@@ -253,57 +454,21 @@ export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; 
             No sensors reporting for {unit.name} yet. See the user guide → Room sensors.
           </div>
         )}
-        {unit.rooms.map((r, i) => {
-          const t = r.temp.at(-1)?.v;
-          const h = r.humidity.at(-1)?.v;
-          const c = t != null ? comfort(t) : null;
-          const vals = r.temp.map((p) => p.v);
-          const lo = vals.length ? Math.min(...vals) : null;
-          const hi = vals.length ? Math.max(...vals) : null;
-          const sc = SERIES_COLORS[i % SERIES_COLORS.length];
-          return (
-            <div
-              key={r.key}
-              className="group relative min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0)_45%),var(--surface)] p-3.5 shadow-[0_10px_30px_rgba(0,0,0,0.4)] transition hover:-translate-y-0.5 hover:border-white/20"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="grid h-8 w-8 place-items-center rounded-xl" style={{ background: `${sc}26`, color: sc }}>
-                  <RoomIcon name={r.label} />
-                </span>
-                {c && (
-                  <span className="flex items-center gap-1 rounded-full bg-black/30 px-2 py-0.5 text-[10px] font-medium text-[var(--ink-2)]">
-                    <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.dot }} />
-                    {c.label}
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 truncate text-sm font-medium text-[var(--ink-2)]">{r.label}</div>
-              <div className="flex items-baseline gap-2">
-                <span className="text-3xl font-semibold tabular-nums tracking-tight text-[var(--ink-1)]">{t != null ? t.toFixed(1) : "—"}°</span>
-                {h != null && (
-                  <span className={`text-sm tabular-nums ${h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"}`}>
-                    {h >= 70 ? "⚠ " : "💧"}
-                    {Math.round(h)}%
-                  </span>
-                )}
-              </div>
-              <Sparkline points={r.temp} color={sc} />
-              {lo != null && hi != null && (
-                <div className="flex justify-between text-[10px] tabular-nums text-[var(--ink-3)]">
-                  <span>24h low {lo.toFixed(1)}°</span>
-                  <span>high {hi.toFixed(1)}°</span>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {unit.rooms.map((r, i) => (
+          <RoomTile key={r.key} r={r} i={i} unit={unit} bookings={bookings} todayKey={todayKey} />
+        ))}
       </div>
     </section>
   );
 }
 
-/** Gantt-style occupancy view: one row per unit. */
+/* ------------------------------------------------------------------ */
+/* Occupancy timeline: one row per Airbnb bedroom                      */
+/* ------------------------------------------------------------------ */
 export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData[]; bookings: Booking[]; now: Date; days?: number }) {
+  const rows = airbnbRoomList(units);
+  if (!rows.length) return null;
+  const multiUnit = new Set(rows.map((r) => r.unit.id)).size > 1;
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
   const list = Array.from({ length: days }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
   const keys = list.map(dayKey);
@@ -311,24 +476,25 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
   const first = keys[0];
   const endKey = dayKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + days));
   const idx = (k: string) => (k <= first ? 0 : k >= endKey ? days : keys.indexOf(k));
-  const occupiedNights = units.reduce(
-    (acc, u) => acc + keys.filter((k) => k >= todayKey && bookings.some((b) => b.unit === u.id && b.start <= k && b.end > k)).length,
-    0,
-  );
-  const futureDays = keys.filter((k) => k >= todayKey).length;
-  const pct = Math.round((occupiedNights / Math.max(1, futureDays * units.length)) * 100);
+  const inRoom = (b: Booking, unitId: string, room: string) => b.unit === unitId && (b.room === room || b.room == null);
+  const future = keys.filter((k) => k >= todayKey);
+  const bookedNights = rows.reduce((acc, { unit, room }) => acc + future.filter((k) => bookings.some((b) => inRoom(b, unit.id, room) && b.start <= k && b.end > k)).length, 0);
+  const pct = Math.round((bookedNights / Math.max(1, future.length * rows.length)) * 100);
+  const cols = `110px repeat(${days}, minmax(0,1fr))`;
 
   return (
-    <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+    <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0)_40%),var(--surface)] p-4 shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">Occupancy · next 3 weeks</h2>
+        <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">
+          <AirbnbBadge /> Room occupancy · next 3 weeks
+        </h2>
         <span className="text-xs text-[var(--ink-2)]">
-          <b className="text-[var(--ink-1)]">{pct}%</b> of nights booked
+          <b className="text-[var(--ink-1)]">{pct}%</b> of room-nights booked
         </span>
       </header>
       <div className="overflow-x-auto">
         <div className="min-w-[760px]">
-          <div className="grid" style={{ gridTemplateColumns: `90px repeat(${days}, minmax(0,1fr))` }}>
+          <div className="grid" style={{ gridTemplateColumns: cols }}>
             <div />
             {list.map((d, i) => (
               <div
@@ -343,14 +509,17 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
               </div>
             ))}
           </div>
-          {units.map((u) => (
-            <div key={u.id} className="relative grid border-t border-[var(--border)]" style={{ gridTemplateColumns: `90px repeat(${days}, minmax(0,1fr))` }}>
-              <div className="py-2.5 text-sm font-medium text-[var(--ink-1)]">{u.name}</div>
+          {rows.map(({ unit, room }) => (
+            <div key={`${unit.id}-${room}`} className="relative grid border-t border-[var(--border)]" style={{ gridTemplateColumns: cols }}>
+              <div className="py-2.5 text-sm font-medium text-[var(--ink-1)]">
+                {multiUnit ? `${unit.name} · ` : ""}
+                {room}
+              </div>
               {keys.map((k) => (
                 <div key={k} className={k === todayKey ? "bg-sky-400/10" : ""} />
               ))}
               {bookings
-                .filter((b) => b.unit === u.id && b.end > first && b.start < endKey)
+                .filter((b) => inRoom(b, unit.id, room) && b.end > first && b.start < endKey)
                 .map((b) => {
                   const s = idx(b.start);
                   const e = Math.max(idx(b.end), s + 1);
@@ -376,19 +545,29 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
   );
 }
 
-/** List of who is in, who arrives next — for the all-units view. */
+/* ------------------------------------------------------------------ */
+/* Agenda: in house / arrivals / departures                            */
+/* ------------------------------------------------------------------ */
 export function Agenda({ units, bookings, todayKey }: { units: UnitData[]; bookings: Booking[]; todayKey: string }) {
-  const name = (id: string | null) => units.find((u) => u.id === id)?.name ?? "Unassigned";
+  const rooms = airbnbRoomList(units);
+  const multiUnit = new Set(rooms.map((r) => r.unit.id)).size > 1;
+  const where = (b: Booking) => {
+    const u = units.find((x) => x.id === b.unit)?.name ?? "";
+    const r = b.room ? shortRoom(b.room) : "Whole unit";
+    return multiUnit ? `${u} · ${r}` : r;
+  };
   const inHouse = bookings.filter((b) => b.start <= todayKey && b.end > todayKey);
-  const arrivals = bookings.filter((b) => b.start >= todayKey).sort((a, b) => a.start.localeCompare(b.start) || (a.unit ?? "").localeCompare(b.unit ?? "")).slice(0, 8);
+  const arrivals = bookings
+    .filter((b) => b.start >= todayKey)
+    .sort((a, b) => a.start.localeCompare(b.start) || (a.room ?? "").localeCompare(b.room ?? ""))
+    .slice(0, 8);
   const checkoutsToday = bookings.filter((b) => b.end === todayKey);
-  const fmt = (k: string) => new Date(k + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
 
   return (
     <div className="space-y-5">
       <div>
         <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-emerald-100/80">
-          In house today · {inHouse.length}/{units.length} units
+          In house tonight · {inHouse.length}/{rooms.length || "–"} rooms
         </h3>
         <ul className="space-y-1.5">
           {inHouse.length === 0 && <li className="text-sm text-emerald-100/70">No guests tonight</li>}
@@ -396,20 +575,20 @@ export function Agenda({ units, bookings, todayKey }: { units: UnitData[]; booki
             <li key={b.id} className="flex items-center justify-between gap-2 rounded-xl bg-gradient-to-r from-emerald-300 to-emerald-400 px-3 py-2 text-emerald-950 shadow">
               <span className="min-w-0">
                 <span className="block truncate font-semibold">{b.guest}</span>
-                <span className="text-[11px] opacity-80">out {fmt(b.end)}</span>
+                <span className="text-[11px] opacity-80">out {fmtDay(b.end)}</span>
               </span>
-              <span className="shrink-0 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">{name(b.unit)}</span>
+              <span className="shrink-0 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">{where(b)}</span>
             </li>
           ))}
         </ul>
       </div>
       {checkoutsToday.length > 0 && (
         <div>
-          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-emerald-100/80">Checking out today</h3>
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-emerald-100/80">Checking out today: clean</h3>
           <ul className="space-y-1 text-sm text-emerald-50">
             {checkoutsToday.map((b) => (
               <li key={b.id}>
-                🧹 {b.guest} · <span className="text-emerald-100/70">{name(b.unit)}</span>
+                🧹 {b.guest} · <span className="text-emerald-100/70">{where(b)}</span>
               </li>
             ))}
           </ul>
@@ -424,10 +603,10 @@ export function Agenda({ units, bookings, todayKey }: { units: UnitData[]; booki
               <span className="min-w-0">
                 <span className="block truncate font-semibold text-white">{b.guest}</span>
                 <span className="text-[11px] text-emerald-100/75">
-                  {fmt(b.start)} · {nights(b)} night{nights(b) === 1 ? "" : "s"}
+                  {fmtDay(b.start)} · {nights(b)} night{nights(b) === 1 ? "" : "s"}
                 </span>
               </span>
-              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100">{name(b.unit)}</span>
+              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100">{where(b)}</span>
             </li>
           ))}
         </ul>

@@ -11,6 +11,9 @@ export type UnitData = {
   id: string;
   name: string;
   note: string;
+  owner: string | null;
+  usage: string | null;
+  airbnbRooms: string[]; // bedrooms let on Airbnb (empty = not an Airbnb unit)
   rooms: RoomSeries[];
 };
 
@@ -24,6 +27,7 @@ export type Booking = {
   end: string; // YYYY-MM-DD (check-out, exclusive)
   source: string;
   unit: string | null; // unit id, e.g. "unit2"
+  room: string | null; // e.g. "Bedroom 1" (null = whole unit)
 };
 
 export type SourceState = "live" | "demo";

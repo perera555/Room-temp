@@ -58,6 +58,7 @@ export function parseIcs(text: string, source: string): Booking[] {
             end,
             source,
             unit: null,
+            room: null,
           });
         }
       }
