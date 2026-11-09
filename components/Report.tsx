@@ -25,7 +25,12 @@ export function Report() {
           return;
         }
         if (!r.ok) throw new Error(`Server returned ${r.status}`);
-        setData(await r.json());
+        const j = (await r.json()) as DashboardData;
+        setData({
+          ...j,
+          gas: Array.isArray(j.gas) ? j.gas.filter((g) => g && Array.isArray(g.changes)) : [],
+          utilities: j.utilities?.entries ? j.utilities : { source: "demo", canRecord: false, entries: [] },
+        });
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Could not load"));
   }, []);

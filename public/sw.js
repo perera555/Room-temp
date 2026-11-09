@@ -1,6 +1,6 @@
 // Room Temp service worker — makes the app installable and keeps the
 // last loaded dashboard visible if the internet drops.
-const CACHE = "room-temp-v1";
+const CACHE = "room-temp-v2"; // bump to clear old cached pages/data after big updates
 const SHELL = ["/", "/guide", "/manifest.webmanifest", "/icons/192", "/icons/512"];
 
 self.addEventListener("install", (event) => {

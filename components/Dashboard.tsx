@@ -78,6 +78,26 @@ function Skeleton() {
   );
 }
 
+/**
+ * Guards against older or cached API responses (e.g. from the offline cache
+ * or a server mid-update) so a shape change can never crash the screen.
+ */
+function normalize(j: DashboardData): DashboardData {
+  const gas = Array.isArray(j.gas) ? j.gas : [];
+  return {
+    ...j,
+    units: Array.isArray(j.units) ? j.units.map((u) => ({ ...u, airbnbRooms: u.airbnbRooms ?? [], owner: u.owner ?? null, usage: u.usage ?? null })) : [],
+    bookings: (Array.isArray(j.bookings) ? j.bookings : []).map((b) => ({
+      ...b,
+      room: b.room ?? null,
+      checkInTime: b.checkInTime ?? null,
+      checkOutTime: b.checkOutTime ?? null,
+    })),
+    gas: gas.filter((g) => g && Array.isArray(g.changes)),
+    utilities: j.utilities && Array.isArray(j.utilities.entries) ? j.utilities : { source: "demo", canRecord: false, entries: [] },
+  };
+}
+
 /** Average several series into 30-minute buckets. */
 function averageSeries(series: Point[][]): Point[] {
   const B = 30 * 60_000;
@@ -144,7 +164,7 @@ export function Dashboard() {
         return;
       }
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      setData(await res.json());
+      setData(normalize(await res.json()));
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load data");
