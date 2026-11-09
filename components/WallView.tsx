@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DashboardData, Point, UnitData } from "@/lib/types";
 import { LineChart, Legend, type LineSeries } from "./charts";
 import { shortRoom } from "./BookingCalendar";
-import { WeatherIcon, describe, compass } from "./Weather";
+import { HourlyStrip, WeatherIcon, describe, compass } from "./Weather";
 import { daysIn, gasSummary, lowestGas } from "./Utilities";
 import {
   DAMP,
@@ -281,10 +281,15 @@ export function WallView({
                 </div>
               ))}
             </div>
+            <div className="mb-1 mt-2 flex items-baseline justify-between text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
+              <span>Next hours</span>
+              <span>💧 rain · wind {f.windUnit}</span>
+            </div>
+            <HourlyStrip forecast={f} count={8} step={2} compact />
           </Card>
 
           <Card title="All units · room temperatures" className="flex-1" right={<span>⚠ ≥{DAMP}% damp</span>}>
-            <div className="grid min-h-0 flex-1 gap-2 overflow-hidden" style={{ gridTemplateRows: `repeat(${data.units.length}, minmax(0,1fr))` }}>
+            <div className="grid min-h-0 flex-1 gap-1.5 overflow-hidden" style={{ gridTemplateRows: `repeat(${data.units.length}, minmax(0,1fr))` }}>
               {data.units.map((u, ui) => (
                 <UnitRow key={u.id} u={u} color={SERIES_COLORS[ui]} />
               ))}
@@ -424,8 +429,8 @@ function UnitRow({ u, color }: { u: UnitData; color: string }) {
   const temps = u.rooms.map((r) => r.temp.at(-1)?.v).filter((v): v is number => v != null);
   const avg = temps.length ? temps.reduce((a, b) => a + b, 0) / temps.length : null;
   return (
-    <div className="chip-3d flex min-h-0 flex-col justify-center rounded-xl border border-white/5 bg-black/25 px-2.5 py-1.5">
-      <div className="mb-1 flex items-center justify-between gap-2">
+    <div className="chip-3d flex min-h-0 flex-col justify-center overflow-hidden rounded-xl border border-white/5 bg-black/25 px-2.5 py-1">
+      <div className="mb-0.5 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
           <b className="text-xs text-[var(--ink-1)]">{u.name}</b>
@@ -445,7 +450,7 @@ function UnitRow({ u, color }: { u: UnitData; color: string }) {
             <div
               key={r.key}
               title={`${r.label}: ${t?.toFixed(1) ?? "—"}°, ${h ?? "—"}%`}
-              className={`flex items-center justify-between gap-1 rounded-md px-1.5 py-1 text-[11px] ${damp ? "bg-amber-400/15" : "bg-white/[0.04]"} ${let_ ? "ring-1 ring-[#ff385c]/40" : ""}`}
+              className={`flex items-center justify-between gap-1 rounded-md px-1.5 py-0.5 text-[11px] ${damp ? "bg-amber-400/15" : "bg-white/[0.04]"} ${let_ ? "ring-1 ring-[#ff385c]/40" : ""}`}
             >
               <span className="truncate text-[var(--ink-3)]">{short(r.label)}</span>
               <b className="tabular-nums text-[var(--ink-1)]">{t != null ? `${t.toFixed(1)}°` : "—"}</b>

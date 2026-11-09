@@ -231,6 +231,58 @@ export function WeatherPanel({ forecast, location, demo }: { forecast: Forecast;
           />
         </div>
       </div>
+
+      <div className="mt-4">
+        <div className="mb-2 flex items-baseline justify-between">
+          <h3 className="text-sm font-medium text-[var(--ink-1)]">Hour by hour: next 24 hours</h3>
+          <span className="text-xs text-[var(--ink-3)]">💧 chance of rain · wind {u}</span>
+        </div>
+        <HourlyStrip forecast={forecast} count={24} step={1} />
+      </div>
     </section>
+  );
+}
+
+/** Day or night at time t, using the forecast's sunrise/sunset. */
+function isDayAt(t: number, forecast: Forecast) {
+  const d = forecast.daily.find((x) => t >= x.sunrise - 12 * 3_600_000 && t < x.sunrise + 12 * 3_600_000);
+  if (!d) {
+    const h = new Date(t).getHours();
+    return h >= 6 && h < 18;
+  }
+  return t >= d.sunrise && t < d.sunset;
+}
+
+/**
+ * Hour-by-hour forecast strip: time, icon, temperature, rain chance, wind.
+ * `step` = hours between slots (1 = every hour, 2 = every 2 hours…).
+ */
+export function HourlyStrip({ forecast, count = 24, step = 1, compact = false }: { forecast: Forecast; count?: number; step?: number; compact?: boolean }) {
+  const slots = forecast.hourly.filter((_, i) => i % step === 0).slice(0, count);
+  const time = (t: number, i: number) => (i === 0 ? "Now" : new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }));
+  return (
+    <div className={compact ? "grid gap-1.5" : "-mx-1 flex gap-2 overflow-x-auto px-1 pb-2"} style={compact ? { gridTemplateColumns: `repeat(${slots.length}, minmax(0,1fr))` } : undefined}>
+      {slots.map((h, i) => {
+        const rainy = h.rain >= 50;
+        return (
+          <div
+            key={h.t}
+            title={`${time(h.t, i)} · ${describe(h.code)} · ${h.temp.toFixed(1)}° · rain ${h.rain}% · wind ${Math.round(h.wind)} ${forecast.windUnit}, gusts ${Math.round(h.gust)}`}
+            className={`chip-3d flex shrink-0 flex-col items-center rounded-lg border text-center ${compact ? "py-1" : "w-[68px] gap-0.5 py-2"} ${
+              i === 0 ? "border-sky-400/40 bg-sky-400/10" : rainy ? "border-sky-300/20 bg-sky-900/20" : "border-white/5 bg-black/25"
+            }`}
+          >
+            <div className={`font-semibold tabular-nums text-[var(--ink-1)] ${compact ? "text-[10px]" : "text-xs"}`}>{time(h.t, i)}</div>
+            <WeatherIcon code={h.code} isDay={isDayAt(h.t, forecast)} size={compact ? 22 : 30} />
+            <div className={`font-semibold tabular-nums text-[var(--ink-1)] ${compact ? "text-[11px]" : "text-sm"}`}>{Math.round(h.temp)}°</div>
+            <div className={`tabular-nums ${rainy ? "font-semibold text-sky-300" : "text-sky-300/70"} ${compact ? "text-[9px]" : "text-[11px]"}`}>💧{h.rain}%</div>
+            <div className={`tabular-nums text-[var(--ink-3)] ${compact ? "text-[9px]" : "text-[11px]"}`}>
+              {Math.round(h.wind)}
+              {!compact && <span className="text-[9px]"> {forecast.windUnit}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
