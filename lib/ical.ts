@@ -9,17 +9,24 @@ function unescapeText(v: string) {
     .trim();
 }
 
-/** Converts an iCal DATE or DATE-TIME value into YYYY-MM-DD. */
-function toDay(value: string): string | null {
+const TIME_ZONE = process.env.TIMEZONE ?? "Asia/Colombo";
+
+/**
+ * Converts an iCal DATE or DATE-TIME value into a local day (YYYY-MM-DD)
+ * and, for timed events, a local time (HH:MM).
+ */
+function toDayTime(value: string): { day: string; time: string | null } | null {
   const m = value.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, z] = m;
   if (h && z) {
-    // UTC timestamp — shift to the calendar day in UTC.
+    // UTC timestamp → the property's local day and time.
     const dt = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
-    return dt.toISOString().slice(0, 10);
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit" }).format(dt);
+    const time = new Intl.DateTimeFormat("en-GB", { timeZone: TIME_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(dt);
+    return { day, time };
   }
-  return `${y}-${mo}-${d}`;
+  return { day: `${y}-${mo}-${d}`, time: h ? `${h}:${mi}` : null };
 }
 
 /** Days that block the calendar but are not real guests (Airbnb host blocks etc). */
@@ -42,8 +49,10 @@ export function parseIcs(text: string, source: string): Booking[] {
     }
     if (line === "END:VEVENT") {
       if (ev?.DTSTART) {
-        const start = toDay(ev.DTSTART);
-        let end = ev.DTEND ? toDay(ev.DTEND) : null;
+        const s = toDayTime(ev.DTSTART);
+        const e = ev.DTEND ? toDayTime(ev.DTEND) : null;
+        const start = s?.day ?? null;
+        let end = e?.day ?? null;
         if (start && (!end || end <= start)) {
           const d = new Date(start + "T00:00:00Z");
           d.setUTCDate(d.getUTCDate() + 1);
@@ -59,6 +68,9 @@ export function parseIcs(text: string, source: string): Booking[] {
             source,
             unit: null,
             room: null,
+            // Times only when the event is timed AND spans nights (a real stay).
+            checkInTime: s?.time && end > start ? s.time : null,
+            checkOutTime: e?.time && end > start ? e.time : null,
           });
         }
       }

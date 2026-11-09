@@ -65,7 +65,7 @@ export default function GuidePage() {
           ["install", "Install the app"],
           ["calendar", "Guest calendar"],
           ["sensors", "Room sensors"],
-          ["energy", "Energy"],
+          ["energy", "Gas & utilities"],
           ["password", "Password"],
           ["faq", "FAQ"],
         ].map(([id, label]) => (
@@ -84,8 +84,7 @@ export default function GuidePage() {
           <li><b>Outside weather, 7-day forecast and wind</b> (speed, gusts, direction) come from Open-Meteo, a free weather service. This works straight away. Just set your location.</li>
           <li><b>Guest bookings</b> are read from your Google Calendar and/or Airbnb calendar links (iCal).</li>
           <li><b>Room temperatures</b> come from small sensors in each room that send their readings to the app (see step 4).</li>
-          <li><b>Energy</b> comes from your Octopus Energy smart meter data.</li>
-          <li><b>Weight</b> comes from any JSON link with your weigh-ins.</li>
+          <li><b>Gas cylinder</b>: estimated from the day you fit a new 12.5 kg cylinder (one button press). Electricity and water can be added later.</li>
         </ul>
         <p>
           Until a source is connected, its panel shows <b>sample data</b> marked with a yellow <b>“Sample data”</b> badge, so you can
@@ -176,7 +175,7 @@ export default function GuidePage() {
           <li>Vercel → your project → <b>Storage</b> → <b>Create / Connect</b> → <b>Upstash (Redis)</b> → free plan → connect to this project. Vercel adds the database keys for you.</li>
           <li>In <b>Settings → Environment Variables</b> add <code>SENSOR_API_KEY</code> = any long secret word (e.g. <code>blue-river-7731</code>). Redeploy.</li>
         </ol>
-        <p><b>Easiest sensor: Shelly H&amp;T</b> (Wi-Fi, battery, no coding, about £25 each, 35 needed for every room):</p>
+        <p><b>Easiest sensor: Shelly H&amp;T</b> (Wi-Fi, battery, no coding, one per room you want to watch; sold online and by Sri Lankan smart-home shops):</p>
         <ol>
           <li>Set it up with the Shelly app and join it to the unit’s Wi-Fi.</li>
           <li>Open the sensor’s settings → <b>Actions / Report URL</b> (“Sensor report”) and paste, changing unit and room:
@@ -205,13 +204,21 @@ Content-Type: application/json
         </p>
       </Section>
 
-      <Section id="energy" n={5} title="Energy (Octopus Energy smart meter)">
-        <ol>
-          <li>Log in at octopus.energy → <b>Account</b> → <b>Personal details</b> → <b>Developer settings</b> (API access).</li>
-          <li>Copy your <b>API key</b>, electricity <b>MPAN</b> + <b>meter serial</b>, and gas <b>MPRN</b> + <b>meter serial</b>.</li>
-          <li>Add them in Vercel (table below). Set your unit prices so the £ cost is right.</li>
-        </ol>
-        <p>Smart meter data usually arrives a day late — that’s why “most recent 24h” can show yesterday.</p>
+      <Section id="energy" n={5} title="Utilities: gas cylinder, electricity, water">
+        <p>
+          <b>Gas cylinder (12.5 kg LPG):</b> there is no meter for a cylinder, so the app <b>estimates</b> how much is left from the date
+          it was fitted. When you change the cylinder, open the dashboard and press <b>New cylinder fitted</b>. The app shows days used,
+          about how many kg and days are left, and the likely empty date. It warns you (⚠ at 25%, ⛔ at 10%) so you can order the next one.
+        </p>
+        <ul>
+          <li>It starts by assuming one cylinder lasts <b>about 3 months (90 days)</b>. After two or more changes it learns how long yours really last.</li>
+          <li>Pressed it by mistake? Use <b>Undo last</b>.</li>
+          <li>The button needs the free Upstash database (step 4). Without it, set <code>GAS_LAST_CHANGED</code> (e.g. <code>2026-11-02</code>) in Vercel instead.</li>
+        </ul>
+        <p>
+          <b>Electricity (CEB/LECO) and water</b> are shown as “coming soon” and can be connected later, for example with a smart
+          energy monitor, or by entering meter readings.
+        </p>
       </Section>
 
       <Section id="password" n={6} title="Password protection (recommended)">
@@ -226,21 +233,18 @@ Content-Type: application/json
         <EnvTable
           rows={[
             ["DASHBOARD_PASSWORD", "Optional password lock", "my-secret-pin"],
-            ["LOCATION_NAME", "Name shown in the header", "Brighton"],
-            ["LATITUDE / LONGITUDE", "Location for outside weather & forecast", "50.82 / -0.14"],
-            ["WIND_UNIT", "Wind speed unit: mph, kmh, ms or kn", "mph"],
+            ["LOCATION_NAME", "Name shown in the header and weather (default Sri Lanka)", "Negombo"],
+            ["LATITUDE / LONGITUDE", "Your town for weather (default Colombo). Find it on Google Maps: right-click → copy numbers", "7.2083 / 79.8358"],
+            ["WIND_UNIT", "Wind speed unit: kmh (default), mph, ms or kn", "kmh"],
+            ["GAS_CYLINDER_KG", "Gas cylinder size (default 12.5)", "12.5"],
+            ["GAS_CYLINDER_DAYS", "How long a cylinder lasts until the app learns it (default 90)", "90"],
+            ["GAS_LAST_CHANGED", "Date the current cylinder was fitted (only if not using the button)", "2026-11-02"],
             ["CALENDAR_ICAL_URLS", "Google/Airbnb iCal links for Unit 3's rooms, comma separated", "Bedroom 1|https://…, Bedroom 2|https://…"],
             ["AIRBNB_UNITS", "Which unit(s) are let on Airbnb (default 3)", "3"],
             ["SENSOR_API_KEY", "Secret word sensors use to send readings", "blue-river-7731"],
             ["KV_REST_API_URL / KV_REST_API_TOKEN", "Added automatically when you connect Upstash Redis", "(automatic)"],
             ["SENSOR_FEED_URL", "Alternative: one JSON file with all readings", "https://pi.example.com/rooms.json"],
             ["SENSOR_FEED_TOKEN", "Optional token for the feed", "abc123"],
-            ["OCTOPUS_API_KEY", "Octopus Energy API key", "sk_live_…"],
-            ["OCTOPUS_ELEC_MPAN / OCTOPUS_ELEC_SERIAL", "Electricity meter", "1200012345678 / 21L1234567"],
-            ["OCTOPUS_GAS_MPRN / OCTOPUS_GAS_SERIAL", "Gas meter", "1234567890 / E6S12345678901"],
-            ["OCTOPUS_GAS_UNITS", "Set to kwh if gas is already in kWh (default m³)", "kwh"],
-            ["ELEC_RATE_PENCE / GAS_RATE_PENCE", "Unit prices for cost estimate", "24.5 / 6.3"],
-            ["WEIGHT_FEED_URL", "JSON list of {date, kg}", "https://…/weight.json"],
           ]}
         />
       </section>
@@ -248,7 +252,7 @@ Content-Type: application/json
       <Section id="faq" n={7} title="FAQ">
         <ul>
           <li><b>Do I need an admin account?</b> No. Only your Vercel login to change settings. Optional password for viewers.</li>
-          <li><b>Does it cost anything?</b> Vercel’s free Hobby plan is enough. Open-Meteo is free. Octopus API is free.</li>
+          <li><b>Does it cost anything?</b> The app itself is free: Vercel’s free Hobby plan, Open-Meteo weather and Upstash’s free plan are enough. You only pay for sensors.</li>
           <li><b>How do I update the app?</b> Push changes to GitHub — Vercel redeploys automatically. Installed apps update on next open.</li>
           <li><b>Offline?</b> The last loaded dashboard stays visible and refreshes when the connection returns.</li>
           <li><b>A panel says “Sample data”.</b> That source isn’t connected yet, or its link failed. Check the setting and redeploy.</li>

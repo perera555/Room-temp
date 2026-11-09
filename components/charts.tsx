@@ -12,7 +12,7 @@ function useWidth<T extends HTMLElement>() {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    setWidth(Math.floor(el.getBoundingClientRect().width));
+    setWidth(Math.floor(el.clientWidth)); // layout size (unaffected by CSS scale)
     const ro = new ResizeObserver(([e]) => setWidth(Math.floor(e.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();
@@ -270,7 +270,7 @@ export function LineChart({
           aria-label={ariaLabel}
           onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            const px = e.clientX - r.left;
+            const px = (e.clientX - r.left) * (width / (r.width || width)); // correct for CSS scaling
             if (px < M.l || px > M.l + iw) return setHoverT(null);
             setHoverT(tMin + ((px - M.l) / iw) * (tMax - tMin));
           }}

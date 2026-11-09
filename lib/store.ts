@@ -43,6 +43,25 @@ export async function saveReadings(rows: { unit: string; room: string; r: Stored
   await pipeline(cmds);
 }
 
+/* ---------------- Gas cylinder changes ---------------- */
+const GAS_KEY = "rt:gas:changes";
+
+export async function loadGasChanges(): Promise<number[]> {
+  const [res] = await pipeline([["LRANGE", GAS_KEY, 0, -1]]);
+  return ((res?.result as string[]) ?? []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+}
+
+export async function addGasChange(t: number) {
+  await pipeline([
+    ["RPUSH", GAS_KEY, String(t)],
+    ["LTRIM", GAS_KEY, -24, -1], // keep the last 24 cylinders
+  ]);
+}
+
+export async function removeLastGasChange() {
+  await pipeline([["RPOP", GAS_KEY]]);
+}
+
 export async function loadReadings(since: number) {
   const [rooms] = await pipeline([["SMEMBERS", "rt:rooms"]]);
   const list = ((rooms?.result as string[]) ?? []).map((s) => {

@@ -5,15 +5,20 @@ import type {
   EnergyDay,
   EnergySlot,
   Forecast,
+  GasState,
   Point,
   RoomSeries,
   SourceState,
   UnitData,
 } from "./types";
 import { UNITS, airbnbRoomsFor, airbnbUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
-import { loadReadings, storeEnabled } from "./store";
+import { loadGasChanges, loadReadings, storeEnabled } from "./store";
 
 const HOUR = 3_600_000;
+/** Sri Lanka is UTC+5:30 — used only to shape the sample (demo) data. */
+const LOCAL_OFFSET_H = 5.5;
+const DEFAULT_LAT = "6.9271"; // Colombo
+const DEFAULT_LON = "79.8612";
 const DAY = 24 * HOUR;
 
 /* ------------------------------------------------------------------ */
@@ -53,11 +58,12 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
 function roomProfile(name: string) {
   const n = name.toLowerCase();
-  if (n.includes("bath")) return { base: 19.0, hum: 64, bath: true, kitchen: false };
-  if (n.includes("kitchen")) return { base: 20.2, hum: 55, bath: false, kitchen: true };
-  if (n.includes("hall") || n.includes("business")) return { base: 20.8, hum: 46, bath: false, kitchen: false };
-  if (n.includes("living")) return { base: 20.6, hum: 50, bath: false, kitchen: false };
-  return { base: 19.2, hum: 52, bath: false, kitchen: false };
+  // Sample values for a tropical (Sri Lanka) home.
+  if (n.includes("bath")) return { base: 27.2, hum: 80, bath: true, kitchen: false };
+  if (n.includes("kitchen")) return { base: 28.6, hum: 72, bath: false, kitchen: true };
+  if (n.includes("hall") || n.includes("business")) return { base: 27.0, hum: 66, bath: false, kitchen: false }; // A/C
+  if (n.includes("living")) return { base: 28.2, hum: 70, bath: false, kitchen: false };
+  return { base: 27.6, hum: 71, bath: false, kitchen: false };
 }
 
 function demoUnits(now: number): UnitData[] {
@@ -78,9 +84,10 @@ function demoUnits(now: number): UnitData[] {
       const temp: Point[] = [];
       const humidity: Point[] = [];
       for (let t = start; t <= end; t += step) {
-        const h = (t / HOUR) % 24;
-        const heat = 1.5 * Math.exp(-((h - 7.5) ** 2) / 2) + 1.8 * Math.exp(-((h - 19) ** 2) / 3);
-        const cooking = p.kitchen ? 1.4 * Math.exp(-((h - 18.5) ** 2) / 0.6) : 0;
+        const h = (t / HOUR + LOCAL_OFFSET_H) % 24;
+        // warmest mid-afternoon, coolest before dawn
+        const heat = 2.4 * Math.exp(-((h - 14.5) ** 2) / 14) - 0.6 * Math.exp(-((h - 5) ** 2) / 6);
+        const cooking = p.kitchen ? 1.4 * Math.exp(-((h - 18.5) ** 2) / 0.6) + 0.9 * Math.exp(-((h - 7) ** 2) / 0.5) : 0;
         const n = smoothNoise(seed, t / (2 * HOUR)) * 1.1;
         temp.push({ t, v: round(p.base + offset - 0.8 + heat + cooking + n) });
         const showers = p.bath ? 16 * Math.exp(-((h - (7.6 + hash(seed + 3))) ** 2) / 0.35) : 0;
@@ -179,8 +186,8 @@ async function storedUnits(now: number): Promise<UnitData[]> {
 /* Outside weather — Open-Meteo (free, no key)                         */
 /* ------------------------------------------------------------------ */
 async function outsideWeather(now: number) {
-  const lat = process.env.LATITUDE ?? "51.5072";
-  const lon = process.env.LONGITUDE ?? "-0.1276";
+  const lat = process.env.LATITUDE ?? DEFAULT_LAT;
+  const lon = process.env.LONGITUDE ?? DEFAULT_LON;
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
     `&minutely_15=temperature_2m,relative_humidity_2m&past_days=1&forecast_days=1&timezone=UTC`;
@@ -207,10 +214,10 @@ function demoOutside(now: number) {
   const temp: Point[] = [];
   const humidity: Point[] = [];
   for (let t = end - DAY; t <= end; t += step) {
-    const h = (t / HOUR) % 24;
+    const h = (t / HOUR + LOCAL_OFFSET_H) % 24;
     const diurnal = Math.sin(((h - 9) / 24) * 2 * Math.PI);
-    temp.push({ t, v: round(9 + 4 * diurnal + smoothNoise(99, t / (4 * HOUR)) * 2) });
-    humidity.push({ t, v: Math.round(78 - 14 * diurnal + smoothNoise(98, t / (4 * HOUR)) * 10) });
+    temp.push({ t, v: round(28 + 3.5 * diurnal + smoothNoise(99, t / (4 * HOUR)) * 1.2) });
+    humidity.push({ t, v: Math.round(78 - 12 * diurnal + smoothNoise(98, t / (4 * HOUR)) * 8) });
   }
   return { temp, humidity };
 }
@@ -218,12 +225,12 @@ function demoOutside(now: number) {
 /* ------------------------------------------------------------------ */
 /* Forecast + wind — Open-Meteo                                        */
 /* ------------------------------------------------------------------ */
-const windUnit = () => (process.env.WIND_UNIT ?? "mph").toLowerCase(); // mph | kmh | ms | kn
+const windUnit = () => (process.env.WIND_UNIT ?? "kmh").toLowerCase(); // kmh | mph | ms | kn
 const windLabel = (u: string) => ({ mph: "mph", kmh: "km/h", ms: "m/s", kn: "kn" })[u] ?? u;
 
 async function liveForecast(): Promise<Forecast> {
-  const lat = process.env.LATITUDE ?? "51.5072";
-  const lon = process.env.LONGITUDE ?? "-0.1276";
+  const lat = process.env.LATITUDE ?? DEFAULT_LAT;
+  const lon = process.env.LONGITUDE ?? DEFAULT_LON;
   const u = windUnit();
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
@@ -287,11 +294,11 @@ function demoForecast(now: number): Forecast {
   const start = Math.floor(now / HOUR) * HOUR;
   const hourly = Array.from({ length: 25 }, (_, i) => {
     const t = start + i * HOUR;
-    const hh = (t / HOUR) % 24;
-    const wind = round(9 + smoothNoise(41, t / (5 * HOUR)) * 10 + 3 * Math.sin(hh / 4), 0);
+    const hh = (t / HOUR + LOCAL_OFFSET_H) % 24;
+    const wind = round(12 + smoothNoise(41, t / (5 * HOUR)) * 10 + 3 * Math.sin(hh / 4), 0);
     return {
       t,
-      temp: round(9 + 4 * Math.sin(((hh - 9) / 24) * 2 * Math.PI), 1),
+      temp: round(28 + 3.5 * Math.sin(((hh - 9) / 24) * 2 * Math.PI), 1),
       wind,
       gust: round(wind * 1.6, 0),
       rain: Math.round(hash(i + 300) * 60),
@@ -302,18 +309,18 @@ function demoForecast(now: number): Forecast {
   const daily = Array.from({ length: 7 }, (_, i) => ({
     date: new Date(today + i * DAY).toISOString().slice(0, 10),
     code: codes[i],
-    max: round(11 + hash(i + 50) * 4, 1),
-    min: round(4 + hash(i + 60) * 4, 1),
+    max: round(30 + hash(i + 50) * 3, 1),
+    min: round(23.5 + hash(i + 60) * 2, 1),
     rain: Math.round(hash(i + 70) * 90),
     wind: round(10 + hash(i + 80) * 15, 0),
     gust: round(22 + hash(i + 90) * 20, 0),
     dir: Math.round(hash(i + 95) * 360),
-    sunrise: today + i * DAY + 7.1 * HOUR,
-    sunset: today + i * DAY + 16.3 * HOUR,
+    sunrise: today + i * DAY + 0.6 * HOUR, // ≈ 06:05 Sri Lanka
+    sunset: today + i * DAY + 12.4 * HOUR, // ≈ 17:55 Sri Lanka
   }));
   return {
     windUnit: windLabel(windUnit()),
-    current: { temp: hourly[0].temp, feels: hourly[0].temp - 2, humidity: 76, wind: hourly[0].wind, gust: hourly[0].gust, dir: 230, code: 3, isDay: true },
+    current: { temp: hourly[0].temp, feels: hourly[0].temp + 3, humidity: 76, wind: hourly[0].wind, gust: hourly[0].gust, dir: 230, code: 3, isDay: true },
     hourly,
     daily,
   };
@@ -464,7 +471,8 @@ function demoBookings(now: number): Booking[] {
   const unit = airbnbUnitIds()[0] ?? "unit3";
   const plan: Record<string, [string, number, number][]> = {
     "Bedroom 1": [["Faye", -7, -4], ["Alberto", -3, 2], ["Calum", 6, 10], ["Marta", 15, 20]],
-    "Bedroom 2": [["Kenji", -2, 4], ["Sophie", 5, 8], ["Lena", 11, 18]],
+    // "Omar" overlaps "Lena" on purpose, to show the overbooking alert in sample mode
+    "Bedroom 2": [["Kenji", -2, 4], ["Sophie", 5, 8], ["Lena", 11, 18], ["Omar", 9, 12]],
     "Bedroom 3": [["Priya", 1, 3], ["Diego", 4, 11], ["Hannah", 13, 16], ["Tomás", 19, 23]],
   };
   return Object.entries(plan).flatMap(([room, rows]) =>
@@ -476,6 +484,8 @@ function demoBookings(now: number): Booking[] {
       source: "Demo",
       unit,
       room,
+      checkInTime: null,
+      checkOutTime: null,
     })),
   );
 }
@@ -525,6 +535,35 @@ async function liveBookings(spec: string): Promise<Booking[]> {
 }
 
 /* ------------------------------------------------------------------ */
+/* LPG gas cylinder (12.5 kg)                                          */
+/* ------------------------------------------------------------------ */
+function gasFrom(changes: number[], source: GasState["source"], canRecord: boolean): GasState {
+  const sizeKg = Number(process.env.GAS_CYLINDER_KG ?? 12.5);
+  const fallbackDays = Number(process.env.GAS_CYLINDER_DAYS ?? 90); // about 3 months per cylinder
+  const gaps = changes.slice(1).map((t, i) => (t - changes[i]) / DAY).filter((d) => d >= 7 && d <= 365);
+  const recent = gaps.slice(-5);
+  const learned = recent.length > 0;
+  const typicalDays = learned ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length) : fallbackDays;
+  return { source, canRecord, sizeKg, changes, typicalDays, learned };
+}
+
+async function getGas(now: number): Promise<GasState> {
+  const canRecord = storeEnabled();
+  if (canRecord) {
+    try {
+      const changes = await loadGasChanges();
+      if (changes.length) return gasFrom(changes, "live", true);
+    } catch (err) {
+      console.error("[dashboard] gas history failed:", err);
+    }
+  }
+  const last = process.env.GAS_LAST_CHANGED ? Date.parse(process.env.GAS_LAST_CHANGED) : NaN;
+  if (Number.isFinite(last)) return gasFrom([last], "settings", canRecord);
+  // sample history: cylinders lasting ~3 months, current one fitted 41 days ago
+  return gasFrom([now - 222 * DAY, now - 132 * DAY, now - 41 * DAY], "demo", canRecord);
+}
+
+/* ------------------------------------------------------------------ */
 async function withFallback<T>(
   name: string,
   live: (() => Promise<T>) | null,
@@ -565,9 +604,12 @@ export async function getDashboardData(): Promise<DashboardData> {
       withFallback("calendar", env.CALENDAR_ICAL_URLS ? () => liveBookings(env.CALENDAR_ICAL_URLS!) : null, () => demoBookings(now)),
     ]);
 
+  const gas = await getGas(now);
+
   return {
     generatedAt: new Date(now).toISOString(),
-    location: env.LOCATION_NAME ?? "Home",
+    location: env.LOCATION_NAME ?? "Sri Lanka",
+    gas,
     sources: {
       rooms: roomsSrc,
       outside: outsideSrc,
@@ -584,6 +626,11 @@ export async function getDashboardData(): Promise<DashboardData> {
     forecast,
     energy,
     weight,
-    bookings,
+    // Airbnb/all-day events have no times → use the house check-in/out times.
+    bookings: bookings.map((b) => ({
+      ...b,
+      checkInTime: b.checkInTime ?? env.CHECKIN_TIME ?? "14:00",
+      checkOutTime: b.checkOutTime ?? env.CHECKOUT_TIME ?? "11:00",
+    })),
   };
 }

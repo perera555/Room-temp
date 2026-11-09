@@ -21,16 +21,73 @@ export function guestStatus(bookings: Booking[], unit: string | null, todayKey: 
   return { staying, next, checkIn, checkOut };
 }
 
+export type Conflict = { a: Booking; b: Booking; room: string; from: string; to: string };
+
+/**
+ * Overbooking check: two bookings in the same unit whose nights overlap, in the
+ * same bedroom (or where one of them books the whole unit).
+ */
+export function findOverbookings(bookings: Booking[], todayKey: string): Conflict[] {
+  const out: Conflict[] = [];
+  const live = bookings.filter((b) => b.end > todayKey && b.unit);
+  for (let i = 0; i < live.length; i++)
+    for (let j = i + 1; j < live.length; j++) {
+      const a = live[i];
+      const b = live[j];
+      if (a.unit !== b.unit) continue;
+      const sameRoom = a.room == null || b.room == null || a.room === b.room;
+      if (!sameRoom) continue;
+      if (a.start < b.end && b.start < a.end) {
+        out.push({
+          a,
+          b,
+          room: a.room ?? b.room ?? "Whole unit",
+          from: a.start > b.start ? a.start : b.start,
+          to: a.end < b.end ? a.end : b.end,
+        });
+      }
+    }
+  return out.sort((x, y) => x.from.localeCompare(y.from));
+}
+
+/** Red alert listing every overbooking. Renders nothing when there are none. */
+export function OverbookingAlert({ conflicts, compact = false }: { conflicts: Conflict[]; compact?: boolean }) {
+  if (!conflicts.length) return null;
+  const d = (k: string) => new Date(k + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  return (
+    <div
+      role="alert"
+      className={`chip-3d flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-red-400/60 bg-gradient-to-r from-red-600/40 to-red-900/40 text-red-50 ${
+        compact ? "px-3 py-1.5 text-xs" : "px-4 py-3 text-sm"
+      }`}
+    >
+      <b className="flex items-center gap-2 uppercase tracking-wider">
+        <span className="animate-pulse">⚠</span> Overbooking{conflicts.length > 1 ? ` ×${conflicts.length}` : ""}
+      </b>
+      {conflicts.map((c, i) => (
+        <span key={i}>
+          <b>{c.room}</b>: {c.a.guest} &amp; {c.b.guest} both booked {d(c.from)} → {d(c.to)}
+        </span>
+      ))}
+      <span className="opacity-75">Cancel or move one booking.</span>
+    </div>
+  );
+}
+
 /** All Airbnb bedrooms across the property, e.g. [{unit, room:"Bedroom 1"}, …]. */
 export function airbnbRoomList(units: UnitData[]) {
   return units.flatMap((u) => u.airbnbRooms.map((room) => ({ unit: u, room })));
 }
 
+/** Humidity (%) above which a room counts as damp. Tropical homes sit around 65–80%. */
+export const DAMP = 85;
+
+/** Comfort bands tuned for a tropical climate (Sri Lanka). */
 function comfort(t: number) {
-  if (t < 16) return { label: "Cold", dot: "#60a5fa" };
-  if (t < 18) return { label: "Cool", dot: "#93c5fd" };
-  if (t <= 23) return { label: "Comfortable", dot: "#34d399" };
-  return { label: "Warm", dot: "#fb923c" };
+  if (t < 22) return { label: "Cool", dot: "#60a5fa" };
+  if (t <= 28) return { label: "Comfortable", dot: "#34d399" };
+  if (t <= 31) return { label: "Warm", dot: "#fb923c" };
+  return { label: "Hot", dot: "#ef4444" };
 }
 
 function AirbnbBadge({ className = "" }: { className?: string }) {
@@ -148,8 +205,46 @@ function GuestLine({ status, compact = false }: { status: ReturnType<typeof gues
   );
 }
 
+/** Small separate box for a check-in or check-out date + time. */
+export function TimeBox({ kind, day, time, todayKey }: { kind: "in" | "out"; day: string; time: string | null; todayKey?: string }) {
+  const isIn = kind === "in";
+  const today = todayKey === day;
+  return (
+    <div
+      className={`chip-3d flex h-[68px] min-w-0 flex-1 basis-0 flex-col justify-center rounded-lg px-2.5 ${
+        isIn ? "chip-in" : "chip-out"
+      } ${today ? "chip-today" : ""}`}
+    >
+      <div className={`text-[9px] font-semibold uppercase tracking-wider ${isIn ? "text-sky-300" : "text-amber-300"}`}>
+        {isIn ? "↘ Check-in" : "↗ Check-out"}
+        {today && " · today"}
+      </div>
+      <div className="truncate text-xs text-white/85">{fmtDay(day)}</div>
+      <div className="text-base font-semibold leading-tight tabular-nums text-white">{time ?? "—"}</div>
+    </div>
+  );
+}
+
+/** Guest name with separate check-in and check-out boxes. */
+export function StayDates({ b, big = false, todayKey }: { b: Booking; big?: boolean; todayKey?: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className={`truncate font-semibold text-white ${big ? "text-lg" : "text-sm"}`}>{b.guest}</div>
+        <div className="shrink-0 text-[11px] text-white/45">
+          {nights(b)} night{nights(b) === 1 ? "" : "s"}
+        </div>
+      </div>
+      <div className="mt-1.5 flex gap-2">
+        <TimeBox kind="in" day={b.start} time={b.checkInTime} todayKey={todayKey} />
+        <TimeBox kind="out" day={b.end} time={b.checkOutTime} todayKey={todayKey} />
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
-/* Airbnb bedrooms (overview hero)                                     */
+/* Airbnb bedrooms (overview)                                          */
 /* ------------------------------------------------------------------ */
 export function AirbnbRooms({ units, bookings, todayKey, onOpen }: { units: UnitData[]; bookings: Booking[]; todayKey: string; onOpen: (id: string) => void }) {
   const list = airbnbRoomList(units);
@@ -203,30 +298,23 @@ export function AirbnbRooms({ units, bookings, todayKey, onOpen }: { units: Unit
                       {multiUnit ? `${unit.name} · ` : ""}
                       {room}
                     </div>
-                    <div className="text-xs text-white/55">Double bed</div>
+                    <div className="text-xs text-white/55">Double bed · single guest or couple (max 2)</div>
                   </div>
                 </div>
                 <div className="text-right">
                   <div className="text-3xl font-semibold tabular-nums text-white">{t != null ? `${t.toFixed(1)}°` : "—"}</div>
-                  {h != null && <div className={`text-xs tabular-nums ${h >= 70 ? "font-semibold text-amber-300" : "text-white/55"}`}>{h >= 70 ? "⚠ " : "💧 "}{Math.round(h)}%</div>}
+                  {h != null && <div className={`text-xs tabular-nums ${h >= DAMP ? "font-semibold text-amber-300" : "text-white/55"}`}>{h >= DAMP ? "⚠ " : "💧 "}{Math.round(h)}%</div>}
                 </div>
               </div>
               <div className="mt-3 rounded-xl bg-white/5 px-3 py-2.5">
-                {st.staying ? (
-                  <>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-emerald-300">Occupied</div>
-                    <div className="truncate text-lg font-semibold text-white">{st.staying.guest}</div>
-                    <div className="text-xs text-white/65">
-                      Check-out {fmtDay(st.staying.end)} · {nights(st.staying)} nights
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-white/50">Vacant tonight</div>
-                    <div className="truncate text-lg font-semibold text-white/85">{st.next ? st.next.guest : "No upcoming guest"}</div>
-                    <div className="text-xs text-white/55">{st.next ? `Arrives ${fmtDay(st.next.start)} · ${nights(st.next)} nights` : "Room is free"}</div>
-                  </>
-                )}
+                <div className={`text-[10px] font-semibold uppercase tracking-wider ${st.staying ? "text-emerald-300" : "text-white/50"}`}>
+                  {st.staying ? "Occupied now" : "Vacant tonight"}
+                </div>
+                {st.staying ? <StayDates b={st.staying} big todayKey={todayKey} /> :<div className="text-sm text-white/55">No guest tonight</div>}
+              </div>
+              <div className="mt-2 rounded-xl bg-white/[0.03] px-3 py-2 ring-1 ring-white/5">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-white/45">Next guest</div>
+                {st.next ? <StayDates b={st.next} todayKey={todayKey} /> :<div className="text-sm text-white/45">Nothing booked yet</div>}
               </div>
               {(st.checkIn || st.checkOut) && (
                 <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
@@ -258,7 +346,7 @@ export function UnitCards({ units, bookings, todayKey, onOpen }: { units: UnitDa
           <button
             key={u.id}
             onClick={() => onOpen(u.id)}
-            className="group relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0)_35%),var(--surface)] p-4 text-left shadow-[0_10px_40px_rgba(0,0,0,0.45)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-400/40"
+            className="card-3d group flex h-full min-w-0 flex-col overflow-hidden rounded-2xl p-4 text-left"
           >
             <span className="absolute inset-x-0 top-0 h-[3px]" style={{ background: color }} />
             <span className="pointer-events-none absolute -right-10 -top-10 h-32 w-32 rounded-full opacity-20 blur-2xl transition group-hover:opacity-35" style={{ background: color }} />
@@ -298,8 +386,8 @@ export function UnitCards({ units, bookings, todayKey, onOpen }: { units: UnitDa
                     </span>
                     <span className="flex shrink-0 items-center gap-2 tabular-nums">
                       {h != null && (
-                        <span className={h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"} title={h >= 70 ? "High humidity: ventilate" : "Humidity"}>
-                          {h >= 70 ? "⚠ " : ""}
+                        <span className={h >= DAMP ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"} title={h >= DAMP ? "High humidity: ventilate" : "Humidity"}>
+                          {h >= DAMP ? "⚠ " : ""}
                           {Math.round(h)}%
                         </span>
                       )}
@@ -330,7 +418,7 @@ function RoomTile({ r, i, unit, bookings, todayKey }: { r: RoomSeries; i: number
   const sc = SERIES_COLORS[i % SERIES_COLORS.length];
   const let_ = unit.airbnbRooms.includes(r.label);
   return (
-    <div className="group relative flex min-w-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0)_45%),var(--surface)] p-3.5 shadow-[0_10px_30px_rgba(0,0,0,0.4)] transition hover:-translate-y-0.5 hover:border-white/20">
+    <div className="card-3d group flex h-full min-h-[190px] min-w-0 flex-col overflow-hidden rounded-2xl p-3.5">
       <div className="flex items-center justify-between gap-2">
         <span className="grid h-8 w-8 place-items-center rounded-xl" style={{ background: `${sc}26`, color: sc }}>
           <RoomIcon name={r.label} />
@@ -348,13 +436,13 @@ function RoomTile({ r, i, unit, bookings, todayKey }: { r: RoomSeries; i: number
       </div>
       <div className="mt-2 truncate text-sm font-medium text-[var(--ink-2)]">
         {r.label}
-        {let_ && <span className="text-[var(--ink-3)]"> · double</span>}
+        {let_ && <span className="text-[var(--ink-3)]"> · double, 1–2 guests</span>}
       </div>
       <div className="flex items-baseline gap-2">
         <span className="text-3xl font-semibold tabular-nums tracking-tight text-[var(--ink-1)]">{t != null ? t.toFixed(1) : "—"}°</span>
         {h != null && (
-          <span className={`text-sm tabular-nums ${h >= 70 ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"}`}>
-            {h >= 70 ? "⚠ " : "💧"}
+          <span className={`text-sm tabular-nums ${h >= DAMP ? "font-semibold text-amber-300" : "text-[var(--ink-3)]"}`}>
+            {h >= DAMP ? "⚠ " : "💧"}
             {Math.round(h)}%
           </span>
         )}
@@ -388,7 +476,7 @@ export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; 
     }, null);
   const warmest = pick((a, b) => a > b);
   const coolest = pick((a, b) => a < b);
-  const damp = unit.rooms.filter((r) => (r.humidity.at(-1)?.v ?? 0) >= 70).length;
+  const damp = unit.rooms.filter((r) => (r.humidity.at(-1)?.v ?? 0) >= DAMP).length;
   const isAirbnb = unit.airbnbRooms.length > 0;
   const booked = unit.airbnbRooms.filter((room) => guestStatus(bookings, unit.id, todayKey, room).staying).length;
 
@@ -415,7 +503,11 @@ export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; 
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               {unit.usage && <span className="rounded-full bg-white/15 px-3 py-1 font-semibold text-white">{unit.usage}</span>}
               <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">{unit.rooms.length} rooms</span>
-              {isAirbnb && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">{unit.airbnbRooms.length} double bedrooms on Airbnb</span>}
+              {isAirbnb && (
+                <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">
+                  {unit.airbnbRooms.length} double bedrooms on Airbnb · single guest or couple each
+                </span>
+              )}
               {warmest && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">▲ Warmest: {warmest.label} {warmest.v.toFixed(1)}°</span>}
               {coolest && <span className="rounded-full bg-white/10 px-3 py-1 text-white/85">▼ Coolest: {coolest.label} {coolest.v.toFixed(1)}°</span>}
               {damp > 0 && <span className="rounded-full bg-amber-400/20 px-3 py-1 font-semibold text-amber-200">⚠ {damp} damp room{damp > 1 ? "s" : ""}</span>}
@@ -465,7 +557,19 @@ export function UnitHero({ unit, bookings, todayKey, index }: { unit: UnitData; 
 /* ------------------------------------------------------------------ */
 /* Occupancy timeline: one row per Airbnb bedroom                      */
 /* ------------------------------------------------------------------ */
-export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData[]; bookings: Booking[]; now: Date; days?: number }) {
+export function Occupancy({
+  units,
+  bookings,
+  now,
+  days = 21,
+  compact = false,
+}: {
+  units: UnitData[];
+  bookings: Booking[];
+  now: Date;
+  days?: number;
+  compact?: boolean;
+}) {
   const rows = airbnbRoomList(units);
   if (!rows.length) return null;
   const multiUnit = new Set(rows.map((r) => r.unit.id)).size > 1;
@@ -480,20 +584,26 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
   const future = keys.filter((k) => k >= todayKey);
   const bookedNights = rows.reduce((acc, { unit, room }) => acc + future.filter((k) => bookings.some((b) => inRoom(b, unit.id, room) && b.start <= k && b.end > k)).length, 0);
   const pct = Math.round((bookedNights / Math.max(1, future.length * rows.length)) * 100);
-  const cols = `110px repeat(${days}, minmax(0,1fr))`;
+  const cols = `${compact ? 52 : 110}px repeat(${days}, minmax(0,1fr))`;
+  // overbooked bookings: 1 = first of a pair (top), 2 = second (shifted down so both show)
+  const clashIds = new Map<string, number>();
+  for (const c of findOverbookings(bookings, todayKey)) {
+    if (!clashIds.has(c.a.id)) clashIds.set(c.a.id, 1);
+    clashIds.set(c.b.id, clashIds.get(c.a.id) === 1 ? 2 : 1);
+  }
 
   return (
-    <section className="min-w-0 rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0)_40%),var(--surface)] p-4 shadow-[0_10px_40px_rgba(0,0,0,0.45)]">
+    <section className={`card-3d min-w-0 rounded-2xl hover:!translate-y-0 ${compact ? "p-3" : "p-4"}`}>
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">
-          <AirbnbBadge /> Room occupancy · next 3 weeks
+          <AirbnbBadge /> Room occupancy · next {days >= 21 ? "3 weeks" : `${Math.round(days / 7)} weeks`}
         </h2>
         <span className="text-xs text-[var(--ink-2)]">
           <b className="text-[var(--ink-1)]">{pct}%</b> of room-nights booked
         </span>
       </header>
       <div className="overflow-x-auto">
-        <div className="min-w-[760px]">
+        <div className={compact ? "" : "min-w-[760px]"}>
           <div className="grid" style={{ gridTemplateColumns: cols }}>
             <div />
             {list.map((d, i) => (
@@ -511,9 +621,9 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
           </div>
           {rows.map(({ unit, room }) => (
             <div key={`${unit.id}-${room}`} className="relative grid border-t border-[var(--border)]" style={{ gridTemplateColumns: cols }}>
-              <div className="py-2.5 text-sm font-medium text-[var(--ink-1)]">
+              <div className={`font-medium text-[var(--ink-1)] ${compact ? "py-1.5 text-xs" : "py-2.5 text-sm"}`}>
                 {multiUnit ? `${unit.name} · ` : ""}
-                {room}
+                {compact ? shortRoom(room) : room}
               </div>
               {keys.map((k) => (
                 <div key={k} className={k === todayKey ? "bg-sky-400/10" : ""} />
@@ -524,15 +634,21 @@ export function Occupancy({ units, bookings, now, days = 21 }: { units: UnitData
                   const s = idx(b.start);
                   const e = Math.max(idx(b.end), s + 1);
                   const current = b.start <= todayKey && b.end > todayKey;
+                  const clash = clashIds.get(b.id);
                   return (
                     <div
                       key={b.id}
-                      title={`${b.guest} · ${fmtRange(b)} · ${nights(b)} nights`}
-                      className={`z-[1] my-1.5 truncate rounded-lg px-2 py-1 text-xs font-semibold shadow ${
-                        current ? "bg-gradient-to-r from-emerald-300 to-emerald-400 text-emerald-950" : "bg-gradient-to-r from-emerald-600 to-emerald-500 text-white"
+                      title={`${b.guest} · ${fmtRange(b)} · ${nights(b)} nights${clash ? " · ⚠ OVERBOOKED" : ""}`}
+                      className={`z-[1] truncate rounded-lg px-2 text-xs font-semibold shadow ${clash ? "self-start py-0.5" : "my-1.5 py-1"} ${
+                        clash
+                          ? "bg-gradient-to-r from-red-500 to-red-600 text-white ring-2 ring-red-300"
+                          : current
+                            ? "bg-gradient-to-r from-emerald-300 to-emerald-400 text-emerald-950"
+                            : "bg-gradient-to-r from-emerald-600 to-emerald-500 text-white"
                       }`}
-                      style={{ gridRow: 1, gridColumn: `${s + 2} / ${e + 2}` }}
+                      style={{ gridRow: 1, gridColumn: `${s + 2} / ${e + 2}`, marginTop: clash === 2 ? 16 : clash === 1 ? 2 : undefined }}
                     >
+                      {clash ? "⚠ " : ""}
                       {b.guest}
                     </div>
                   );
@@ -575,7 +691,9 @@ export function Agenda({ units, bookings, todayKey }: { units: UnitData[]; booki
             <li key={b.id} className="flex items-center justify-between gap-2 rounded-xl bg-gradient-to-r from-emerald-300 to-emerald-400 px-3 py-2 text-emerald-950 shadow">
               <span className="min-w-0">
                 <span className="block truncate font-semibold">{b.guest}</span>
-                <span className="text-[11px] opacity-80">out {fmtDay(b.end)}</span>
+                <span className="block text-[11px] opacity-80">
+                  In {fmtDay(b.start)} {b.checkInTime} → Out {fmtDay(b.end)} {b.checkOutTime}
+                </span>
               </span>
               <span className="shrink-0 rounded-full bg-emerald-950/80 px-2 py-0.5 text-[10px] font-semibold text-emerald-200">{where(b)}</span>
             </li>
@@ -599,14 +717,17 @@ export function Agenda({ units, bookings, todayKey }: { units: UnitData[]; booki
         <ul className="space-y-1.5">
           {arrivals.length === 0 && <li className="text-sm text-emerald-100/70">Nothing booked yet</li>}
           {arrivals.map((b) => (
-            <li key={b.id} className="flex items-center justify-between gap-2 rounded-xl bg-emerald-950/30 px-3 py-2 ring-1 ring-white/10">
-              <span className="min-w-0">
-                <span className="block truncate font-semibold text-white">{b.guest}</span>
-                <span className="text-[11px] text-emerald-100/75">
-                  {fmtDay(b.start)} · {nights(b)} night{nights(b) === 1 ? "" : "s"}
+            <li key={b.id} className="card-3d rounded-xl !bg-emerald-950/40 px-3 py-2.5">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="truncate font-semibold text-white">{b.guest}</span>
+                <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100">
+                  {where(b)} · {nights(b)}n
                 </span>
-              </span>
-              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-100">{where(b)}</span>
+              </div>
+              <div className="flex gap-2">
+                <TimeBox kind="in" day={b.start} time={b.checkInTime} todayKey={todayKey} />
+                <TimeBox kind="out" day={b.end} time={b.checkOutTime} todayKey={todayKey} />
+              </div>
             </li>
           ))}
         </ul>

@@ -70,7 +70,7 @@ export function BookingCalendar({
         lanes.map((l, i) => (
           <div key={l} style={{ gridRow: 1, gridColumn: i + 2 }} className="pb-2 text-center">
             <div className="text-[11px] font-semibold text-white">{shortRoom(l)}</div>
-            <div className="text-[9px] uppercase tracking-wider text-emerald-100/60">Double</div>
+            <div className="text-[9px] uppercase tracking-wider text-emerald-100/60">Double · 1–2</div>
           </div>
         ))}
       {list.map((d, i) => {

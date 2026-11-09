@@ -28,6 +28,8 @@ export type Booking = {
   source: string;
   unit: string | null; // unit id, e.g. "unit2"
   room: string | null; // e.g. "Bedroom 1" (null = whole unit)
+  checkInTime: string | null; // "14:00"
+  checkOutTime: string | null; // "11:00"
 };
 
 export type SourceState = "live" | "demo";
@@ -59,9 +61,19 @@ export type Forecast = {
   }[];
 };
 
+export type GasState = {
+  source: "live" | "settings" | "demo";
+  canRecord: boolean; // true when the app can save button presses
+  sizeKg: number;
+  changes: number[]; // timestamps a new cylinder was fitted, oldest first
+  typicalDays: number; // how long a cylinder usually lasts
+  learned: boolean; // typicalDays came from real history
+};
+
 export type DashboardData = {
   generatedAt: string;
   location: string;
+  gas: GasState;
   sources: {
     rooms: SourceState;
     outside: SourceState;

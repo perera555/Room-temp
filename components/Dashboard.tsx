@@ -7,7 +7,23 @@ import { LineChart, StackedBars, Legend, type LineSeries } from "./charts";
 import { BookingCalendar, shortRoom } from "./BookingCalendar";
 import { InstallButton } from "./InstallButton";
 import { WeatherPanel, describe, compass } from "./Weather";
-import { Agenda, AirbnbRooms, Occupancy, SERIES_COLORS, UnitCards, UnitHero, UnitTabs, airbnbRoomList, dayKey, guestStatus } from "./Units";
+import {
+  Agenda,
+  AirbnbRooms,
+  DAMP,
+  Occupancy,
+  OverbookingAlert,
+  SERIES_COLORS,
+  UnitCards,
+  UnitHero,
+  UnitTabs,
+  airbnbRoomList,
+  dayKey,
+  findOverbookings,
+  guestStatus,
+} from "./Units";
+import { UtilitiesPanel, gasSummary } from "./Utilities";
+import { WallView } from "./WallView";
 
 const OUTSIDE = "#9085e9";
 const ELEC = "#3987e5";
@@ -15,12 +31,11 @@ const GAS = "#c98500";
 const WEIGHT = "#d95926";
 const REFRESH_MS = 5 * 60_000;
 const VIEW_KEY = "rt:view";
+const LAYOUT_KEY = "rt:layout";
 
 function Panel({ title, right, children, className = "" }: { title: string; right?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section
-      className={`min-w-0 rounded-2xl border border-[var(--border)] bg-[linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0)_40%),var(--surface)] p-4 shadow-[0_10px_40px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.05)] ${className}`}
-    >
+    <section className={`card-3d min-w-0 rounded-2xl p-4 hover:!translate-y-0 ${className}`}>
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-300">{title}</h2>
         {right && <div className="text-[11px] uppercase tracking-wider text-[var(--ink-3)]">{right}</div>}
@@ -32,7 +47,7 @@ function Panel({ title, right, children, className = "" }: { title: string; righ
 
 function Tile({ label, value, sub, accent }: { label: string; value: ReactNode; sub?: ReactNode; accent: string }) {
   return (
-    <div className="relative min-w-0 overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-4">
+    <div className="card-3d flex h-full min-h-[120px] min-w-0 flex-col overflow-hidden rounded-2xl p-4">
       <div className="absolute inset-x-0 top-0 h-[3px]" style={{ background: accent }} />
       <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-[var(--ink-3)]">{label}</div>
       <div className="mt-1 truncate text-2xl font-semibold tracking-tight text-[var(--ink-1)] sm:text-3xl">{value}</div>
@@ -89,6 +104,28 @@ export function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [now, setNow] = useState<Date | null>(null);
   const [view, setViewState] = useState("all");
+  // "auto": wall view on big landscape screens; "wall"/"scroll" force one.
+  const [layout, setLayoutState] = useState<"auto" | "wall" | "scroll">("auto");
+  const [bigScreen, setBigScreen] = useState(false);
+
+  const setLayout = (v: "auto" | "wall" | "scroll") => {
+    setLayoutState(v);
+    try {
+      localStorage.setItem(LAYOUT_KEY, v);
+    } catch {}
+  };
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LAYOUT_KEY);
+      if (saved === "wall" || saved === "scroll" || saved === "auto") setLayoutState(saved);
+    } catch {}
+    const mq = window.matchMedia("(min-width: 1200px) and (orientation: landscape)");
+    const on = () => setBigScreen(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
 
   const setView = (v: string) => {
     setViewState(v);
@@ -137,6 +174,21 @@ export function Dashboard() {
 
   const updated = data ? new Date(data.generatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--";
   const unit = data?.units.find((u) => u.id === view) ?? null;
+  const wall = layout === "wall" || (layout === "auto" && bigScreen);
+
+  if (wall && data && now) {
+    return (
+      <WallView
+        data={data}
+        now={now}
+        updated={updated}
+        loading={loading}
+        error={error}
+        onReload={load}
+        onDetailed={() => setLayout("scroll")}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto flex w-full max-w-[1900px] flex-1 flex-col gap-4 px-4 py-4 sm:px-6">
@@ -162,6 +214,13 @@ export function Dashboard() {
           <div className="hidden text-3xl font-semibold tabular-nums tracking-tight text-[var(--ink-1)] sm:block">
             {now ? now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }) : "--:--"}
           </div>
+          <button
+            onClick={() => setLayout("wall")}
+            className="hidden rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white lg:block"
+            title="Show everything on one screen"
+          >
+            Wall view
+          </button>
           <button
             onClick={load}
             disabled={loading}
@@ -193,7 +252,7 @@ export function Dashboard() {
         </div>
       )}
 
-      {!data || !now ? <Skeleton /> : <Body data={data} now={now} updated={updated} unit={unit} onOpen={setView} />}
+      {!data || !now ? <Skeleton /> : <Body data={data} now={now} updated={updated} unit={unit} onOpen={setView} onReload={load} />}
 
       <footer className="pt-2 text-center text-[11px] text-[var(--ink-3)]">
         Updated {updated} · refreshes every 5 minutes ·{" "}
@@ -211,12 +270,14 @@ function Body({
   updated,
   unit,
   onOpen,
+  onReload,
 }: {
   data: DashboardData;
   now: Date;
   updated: string;
   unit: UnitData | null;
   onOpen: (id: string) => void;
+  onReload: () => void;
 }) {
   const todayKey = dayKey(now);
 
@@ -241,6 +302,9 @@ function Body({
   const { next } = guestStatus(data.bookings, null, todayKey);
   const daysUntil = next ? Math.round((new Date(next.start + "T00:00:00").getTime() - new Date(todayKey + "T00:00:00").getTime()) / 86_400_000) : null;
   const showBookings = unit ? unit.airbnbRooms.length > 0 : airbnbRooms.length > 0;
+  const gas = gasSummary(data.gas, now.getTime());
+  const showEnergy = data.sources.energy === "live";
+  const showWeight = data.sources.weight === "live";
 
   const latestWeight = data.weight.at(-1)?.v;
   const weightMonthAgo = data.weight.find((p) => p.t >= (data.weight.at(-1)?.t ?? 0) - 30 * 86_400_000)?.v;
@@ -248,6 +312,7 @@ function Body({
 
   return (
     <>
+      <OverbookingAlert conflicts={findOverbookings(data.bookings, todayKey)} />
       <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 ${unit ? "hidden" : ""}`}>
         <Tile
           label={unit ? `${unit.name} · indoor average` : "Indoor average · all units"}
@@ -262,10 +327,12 @@ function Body({
           sub={`${describe(f.current.code)} · Wind ${Math.round(f.current.wind)} ${f.windUnit} ${compass(f.current.dir)} · Gusts ${Math.round(f.current.gust)}`}
         />
         <Tile
-          label="Energy · last 30 days"
-          value={`£${data.energy.totals.cost.toFixed(2)}`}
-          accent={`linear-gradient(90deg,${ELEC},${GAS})`}
-          sub={`${data.energy.totals.elec} kWh electricity · ${data.energy.totals.gas} kWh gas`}
+          label={`Gas cylinder · ${data.gas.sizeKg} kg`}
+          value={`${gas.pct}% left`}
+          accent={gas.level === "critical" ? "#d03b3b" : gas.level === "low" ? "#fab219" : "linear-gradient(90deg,#f97316,#f59e0b)"}
+          sub={`≈ ${gas.daysLeft} days left · empty around ${new Date(gas.emptyAt).toLocaleDateString([], { day: "numeric", month: "short" })}${
+            gas.level !== "ok" ? " · order soon" : ""
+          }`}
         />
         <Tile
           label="Airbnb rooms tonight"
@@ -282,10 +349,7 @@ function Body({
       {unit ? (
         <UnitHero unit={unit} bookings={data.bookings} todayKey={todayKey} index={data.units.findIndex((u) => u.id === unit.id)} />
       ) : (
-        <>
-          <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />
-          <Occupancy units={data.units} bookings={data.bookings} now={now} />
-        </>
+        <Occupancy units={data.units} bookings={data.bookings} now={now} />
       )}
 
       {unit && unit.airbnbRooms.length > 0 && <Occupancy units={[unit]} bookings={data.bookings} now={now} />}
@@ -320,12 +384,26 @@ function Body({
           </h3>
           <LineChart series={[{ key: "out", label: "Outside", color: OUTSIDE, points: data.outside.temp }]} unit="°" area height={140} ariaLabel="Outside temperature over the last 24 hours" />
 
-          <h3 className="mb-1 mt-5 text-sm font-medium text-[var(--ink-1)]">Humidity — last 24 hours</h3>
-          <Legend items={humSeries.map((s) => ({ label: s.label, color: s.color }))} />
-          <LineChart series={humSeries} unit="%" decimals={0} height={200} ariaLabel="Relative humidity over the last 24 hours" />
         </Panel>
 
         <div className="flex min-w-0 flex-col gap-4">
+          <UtilitiesPanel gas={data.gas} now={now.getTime()} onChanged={onReload} />
+
+          <Panel
+            title="Humidity"
+            right={
+              <span className="flex items-center gap-2">
+                <DemoBadge show={data.sources.rooms === "demo"} /> Updated {updated}
+              </span>
+            }
+          >
+            <h3 className="mb-1 text-sm font-medium text-[var(--ink-1)]">{unit ? "Each room" : "Average per unit"} — last 24 hours</h3>
+            <Legend items={humSeries.map((s) => ({ label: s.label, color: s.color }))} />
+            <LineChart series={humSeries} unit="%" decimals={0} height={220} ariaLabel="Relative humidity over the last 24 hours" />
+            <p className="mt-2 text-xs text-[var(--ink-3)]">⚠ Above {DAMP}% for long periods risks mould: run fans or A/C dry mode.</p>
+          </Panel>
+
+          {showEnergy && (
           <Panel
             title="Energy"
             right={
@@ -362,7 +440,9 @@ function Body({
               ariaLabel="Half-hourly electricity and gas use for the most recent 24 hours"
             />
           </Panel>
+          )}
 
+          {showWeight && (
           <Panel
             title="Weight"
             className="flex-1"
@@ -388,6 +468,7 @@ function Body({
               ariaLabel="Body weight over time in kilograms"
             />
           </Panel>
+          )}
         </div>
 
         {showBookings && (
@@ -416,6 +497,8 @@ function Body({
           <UnitCards units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />
         </section>
       )}
+
+      {!unit && <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />}
     </>
   );
 }
