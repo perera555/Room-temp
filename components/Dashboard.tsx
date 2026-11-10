@@ -138,7 +138,11 @@ function normalize(j: DashboardData): DashboardData {
       checkOutTime: b.checkOutTime ?? null,
     })),
     gas: gas.filter((g) => g && Array.isArray(g.changes)),
-    utilities: j.utilities && Array.isArray(j.utilities.entries) ? j.utilities : { source: "demo", canRecord: false, entries: [] },
+    // only record types this version knows (an older or newer cached copy can't break the page)
+    utilities:
+      j.utilities && Array.isArray(j.utilities.entries)
+        ? { ...j.utilities, entries: j.utilities.entries.filter((e) => e && ["electricity", "water", "gas", "telecom", "mobile"].includes(e.kind)) }
+        : { source: "demo", canRecord: false, entries: [] },
     // older cached data used true/false; convert to the three statuses
     unitInfo: j.unitInfo && typeof j.unitInfo === "object" ? j.unitInfo : {},
     telecomMap: Array.isArray(j.telecomMap) ? j.telecomMap : [],
@@ -146,9 +150,16 @@ function normalize(j: DashboardData): DashboardData {
     services: Object.fromEntries(
       Object.entries(j.services && typeof j.services === "object" ? j.services : {}).map(([u, kinds]) => [
         u,
-        Object.fromEntries(
-          Object.entries(kinds as Record<string, unknown>).map(([k, v]) => [k, v === true ? "in_use" : v === false ? "off" : v]),
-        ),
+        {
+          electricity: "off",
+          water: "off",
+          gas: "off",
+          telecom: "off",
+          mobile: "off", // older saved data has no mobile yet
+          ...Object.fromEntries(
+            Object.entries(kinds as Record<string, unknown>).map(([k, v]) => [k, v === true ? "in_use" : v === false ? "off" : v]),
+          ),
+        },
       ]),
     ) as DashboardData["services"],
   };
