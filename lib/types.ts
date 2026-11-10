@@ -104,6 +104,12 @@ export type UtilitiesState = {
 };
 
 export type DashboardData = {
+  alerts: {
+    hot: number; // too hot at or above °C
+    cold: number; // too cold at or below °C
+    repeatMin: number;
+    channels: { ntfy: boolean; whatsapp: boolean; telegram: boolean };
+  };
   utilities: UtilitiesState;
   services: Services;
   generatedAt: string;

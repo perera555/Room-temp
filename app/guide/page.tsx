@@ -67,6 +67,7 @@ export default function GuidePage() {
           ["sensors", "Room sensors"],
           ["energy", "Energy & printing"],
           ["overbooking", "Overbooking"],
+          ["alerts", "Hot/cold alerts"],
           ["password", "Password"],
           ["faq", "FAQ"],
         ].map(([id, label]) => (
@@ -240,7 +241,42 @@ Content-Type: application/json
         </p>
       </Section>
 
-      <Section id="overbooking" n={6} title="Avoiding overbooking">
+      <Section id="alerts" n={6} title="Too hot / too cold alerts (voice and phone messages)">
+        <p>
+          When a room reaches <b>32°C or more</b> (too hot) or <b>20°C or less</b> (too cold), the dashboard shows a red or blue
+          <b> TOO HOT / TOO COLD</b> bar. It can also <b>speak the warning</b> and send a <b>message to your phone</b>. Alerts only
+          come from real sensors, never from sample data. Change the limits with <code>ALERT_HOT</code> and <code>ALERT_COLD</code>.
+        </p>
+        <p>
+          <b>Voice on the wall screen:</b> tap <b>🔇</b> in the top bar (or tick “Voice &amp; beep” in the Alerts panel) so it shows
+          <b> 🔊</b>. Browsers only allow sound after one tap, so tap it once after the screen starts. On a Raspberry Pi kiosk you can
+          start Chromium with <code>--autoplay-policy=no-user-gesture-required</code>. The warning repeats every 15 minutes while the
+          room is still out of range.
+        </p>
+        <p><b>Phone messages (works even when the app is closed). Choose one or more:</b></p>
+        <ol>
+          <li>
+            <b>ntfy (easiest, free, no account):</b> install the <b>ntfy</b> app (Android / iPhone) → <b>+</b> → subscribe to a secret
+            topic name you invent, e.g. <code>roomtemp-perera-7731</code>. In Vercel add <code>NTFY_TOPIC</code> = that name.
+          </li>
+          <li>
+            <b>WhatsApp (free via CallMeBot):</b> save <b>+34 644 51 95 23</b> in your phone, send it the WhatsApp message
+            <code>I allow callmebot to send me messages</code>. You get an API key back. In Vercel add
+            <code>CALLMEBOT_WHATSAPP</code> = <code>+9477xxxxxxx:APIKEY</code> (several numbers: separate with commas).
+          </li>
+          <li>
+            <b>Telegram:</b> create a bot with <b>@BotFather</b> (gives <code>TELEGRAM_BOT_TOKEN</code>), send your bot a message, then
+            get your chat id (e.g. from <b>@userinfobot</b>) for <code>TELEGRAM_CHAT_ID</code>.
+          </li>
+        </ol>
+        <p>
+          After adding a setting, <b>Redeploy</b> and press <b>🔔 Test alert</b> in the Alerts panel. You get one message when a room
+          goes out of range, a reminder every hour (<code>ALERT_REPEAT_MIN</code>) while it lasts, and “✅ back to normal” when it
+          recovers. Phone messages need the Upstash database (step 4) so the app remembers what it already sent.
+        </p>
+      </Section>
+
+      <Section id="overbooking" n={7} title="Avoiding overbooking">
         <p>
           The dashboard checks every booking. If two bookings overlap for the same bedroom, a red <b>⚠ OVERBOOKING</b> bar appears with
           both guests and the dates, and the clash turns red in the occupancy chart. Cancel or move one of them.
@@ -253,7 +289,7 @@ Content-Type: application/json
         </p>
       </Section>
 
-      <Section id="password" n={7} title="Password protection (recommended)">
+      <Section id="password" n={8} title="Password protection (recommended)">
         <p>
           No admin account is needed. To keep guest names private, add <code>DASHBOARD_PASSWORD</code> in Vercel. Each device asks
           for the password once and stays signed in for a year. Remove the variable to turn the lock off.
@@ -281,7 +317,7 @@ Content-Type: application/json
         />
       </section>
 
-      <Section id="faq" n={8} title="FAQ">
+      <Section id="faq" n={9} title="FAQ">
         <ul>
           <li><b>Do I need an admin account?</b> No. Only your Vercel login to change settings. Optional password for viewers.</li>
           <li><b>Does it cost anything?</b> The app itself is free: Vercel’s free Hobby plan, Open-Meteo weather and Upstash’s free plan are enough. You only pay for sensors.</li>

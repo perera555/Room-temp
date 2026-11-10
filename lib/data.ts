@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import { UNITS, airbnbRoomsFor, airbnbUnitIds, gasUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
 import { loadGasChanges, loadReadings, loadServiceOverrides, loadUtilityEntries, storeEnabled } from "./store";
+import { alertSettings } from "./alerts";
 
 const HOUR = 3_600_000;
 /** Sri Lanka is UTC+5:30 — used only to shape the sample (demo) data. */
@@ -707,6 +708,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     gas,
     utilities,
     services,
+    alerts: alertSettings(),
     sources: {
       rooms: roomsSrc,
       outside: outsideSrc,

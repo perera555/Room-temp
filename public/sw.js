@@ -48,6 +48,17 @@ async function cacheFirst(request) {
   return res;
 }
 
+// Tapping an alert notification opens (or focuses) the dashboard.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => new URL(c.url).origin === self.location.origin);
+      return open ? open.focus() : self.clients.openWindow("/");
+    }),
+  );
+});
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;

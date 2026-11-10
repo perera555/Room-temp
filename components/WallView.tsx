@@ -7,6 +7,7 @@ import { LineChart, Legend, type LineSeries } from "./charts";
 import { shortRoom } from "./BookingCalendar";
 import { HourlyStrip, WeatherIcon, describe, compass } from "./Weather";
 import { daysIn, gasSummary, lowestGas } from "./Utilities";
+import { VoiceToggle } from "./Alerts";
 import {
   DAMP,
   Occupancy,
@@ -211,6 +212,7 @@ export function WallView({
               <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
             </svg>
           </button>
+          <VoiceToggle />
           <button onClick={onDetailed} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Scrolling view with every detail, unit pages and energy records">
             Detailed view
           </button>

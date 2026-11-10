@@ -1,5 +1,6 @@
 import { saveReadings, storeEnabled, type StoredReading } from "@/lib/store";
 import { unitIdFrom } from "@/lib/units";
+import { checkReading } from "@/lib/alerts";
 
 /**
  * Sensors send readings here.
@@ -48,6 +49,19 @@ async function handle(req: Request, items: Input[]) {
     rows.push({ unit, room, r });
   }
   await saveReadings(rows);
+  // too hot / too cold → message the owner (only the latest reading per room counts)
+  const latestPerRoom = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    const k = `${row.unit}|${row.room}`;
+    if (row.r.temp != null && (!latestPerRoom.get(k) || row.r.t >= latestPerRoom.get(k)!.r.t)) latestPerRoom.set(k, row);
+  }
+  for (const row of latestPerRoom.values()) {
+    try {
+      await checkReading(row.unit, row.room, row.r.temp!);
+    } catch (err) {
+      console.error("[alerts] failed:", err);
+    }
+  }
   return Response.json({ ok: true, saved: rows.length });
 }
 

@@ -71,6 +71,26 @@ export async function deleteUtilityEntry(id: string) {
   return Boolean(match);
 }
 
+/* ---------------- Temperature alert state (one key per room) ---------------- */
+export type AlertMemory = { kind: "hot" | "cold"; sentAt: number };
+
+export async function getAlertMemory(key: string): Promise<AlertMemory | null> {
+  const [res] = await pipeline([["GET", key]]);
+  try {
+    return res?.result ? (JSON.parse(res.result as string) as AlertMemory) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setAlertMemory(key: string, m: AlertMemory) {
+  await pipeline([["SET", key, JSON.stringify(m), "EX", 3 * 24 * 3600]]);
+}
+
+export async function clearAlertMemory(key: string) {
+  await pipeline([["DEL", key]]);
+}
+
 /* ---------------- Services in use per unit ---------------- */
 const SERVICES_KEY = "rt:services";
 

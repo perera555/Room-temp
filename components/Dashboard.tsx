@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { DashboardData, Point, UnitData } from "@/lib/types";
 import { LineChart, StackedBars, Legend, type LineSeries } from "./charts";
 import { BookingCalendar, shortRoom } from "./BookingCalendar";
@@ -24,6 +24,7 @@ import {
 } from "./Units";
 import { EnergyRecords, UtilitiesPanel, lowestGas } from "./Utilities";
 import { WallView } from "./WallView";
+import { AlertAnnouncer, AlertBar, AlertsPanel, findTempAlerts } from "./Alerts";
 import { flushOutbox, onOutboxChange, outboxCount } from "@/lib/outbox";
 
 const OUTSIDE = "#9085e9";
@@ -291,24 +292,35 @@ export function Dashboard() {
   const wall = layout === "wall" || (layout === "auto" && bigScreen);
 
   const offlineBar = <OfflineBar online={online} error={error} pending={pending} updated={updated} syncMsg={syncMsg} />;
+  // rooms that are too hot / too cold right now (real sensor data only)
+  const tempAlerts = useMemo(() => (data ? findTempAlerts(data) : []), [data]);
 
   if (wall && data && now) {
     return (
-      <WallView
-        data={data}
-        now={now}
-        updated={updated}
-        loading={loading}
-        error={online ? error : "offline"}
-        onReload={load}
-        onDetailed={() => setLayout("scroll")}
-        banner={offlineBar}
-      />
+      <>
+        <AlertAnnouncer alerts={tempAlerts} />
+        <WallView
+          data={data}
+          now={now}
+          updated={updated}
+          loading={loading}
+          error={online ? error : "offline"}
+          onReload={load}
+          onDetailed={() => setLayout("scroll")}
+          banner={
+            <>
+              <AlertBar alerts={tempAlerts} compact />
+              {offlineBar}
+            </>
+          }
+        />
+      </>
     );
   }
 
   return (
     <div className="mx-auto flex w-full max-w-[1900px] flex-1 flex-col gap-4 px-4 py-4 sm:px-6">
+      <AlertAnnouncer alerts={tempAlerts} />
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <img src="/icons/192" alt="" width={44} height={44} className="rounded-xl shadow-lg" />
@@ -370,6 +382,7 @@ export function Dashboard() {
 
       {data && <UnitTabs units={data.units} value={unit ? unit.id : "all"} onChange={setView} />}
 
+      <AlertBar alerts={tempAlerts} />
       {offlineBar}
 
       {!data || !now ? <Skeleton /> : <Body data={data} now={now} updated={updated} unit={unit} onOpen={setView} onReload={load} />}
@@ -515,6 +528,8 @@ function Body({
 
         <div className="flex min-w-0 flex-col gap-4">
           <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} services={data.services} now={now.getTime()} onChanged={onReload} />
+
+          <AlertsPanel data={data} />
 
           <Panel
             title="Humidity"
