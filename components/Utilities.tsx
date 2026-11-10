@@ -175,6 +175,14 @@ export function EnergyForm({
   // bill month (YYYY-MM) - follows the "To" date unless changed by hand
   const [billM, setBillM] = useState<string>("");
   const monthOf = billM || f.to.slice(0, 7);
+  // each service can have its own From / To (bills cover different periods); default = the dates at the top
+  const [own, setOwn] = useState<Partial<Record<UtilityKind, { from: string; to: string }>>>({});
+  const period = (k: UtilityKind) => own[k] ?? { from: f.from, to: f.to };
+  const setPeriod = (k: UtilityKind, key: "from" | "to", v: string) => setOwn((p) => ({ ...p, [k]: { ...period(k), [key]: v } }));
+  const daysOf = (k: UtilityKind) => {
+    const d = period(k);
+    return d.from && d.to ? Math.max(1, Math.round((Date.parse(d.to) - Date.parse(d.from)) / DAY) + 1) : null;
+  };
   // telecom bill: separate charges and connection (D1 / D2 / D3)
   const blankTc: Tc = { data: "", calls: "", tax: "", other: "", connection: "" };
   const [tcs, setTcs] = useState<Record<"telecom" | "mobile", Tc>>({ telecom: blankTc, mobile: blankTc });
@@ -226,8 +234,9 @@ export function EnergyForm({
               const tcSum = tc ? tcSumOf(tc) : 0;
               await post("/api/utilities", {
                 ...f,
+                ...period(k),
                 kind: k,
-                month: monthOf,
+                month: own[k] && !billM ? period(k).to.slice(0, 7) : monthOf,
                 account: acct[k],
                 amount: Number(amount[k]),
                 cost: cost[k] === "" ? (tcSum ? tcSum : null) : Number(cost[k]),
@@ -369,11 +378,11 @@ export function EnergyForm({
             )}
           </div>
           <div>
-            <label className={label} htmlFor="ef-from">From</label>
+            <label className={label} htmlFor="ef-from">From · all services</label>
             <input id="ef-from" type="date" required className={input} value={f.from} onChange={(e) => set("from", e.target.value)} />
           </div>
           <div>
-            <label className={label} htmlFor="ef-to">To</label>
+            <label className={label} htmlFor="ef-to">To · all services</label>
             <input id="ef-to" type="date" required min={f.from} className={input} value={f.to} onChange={(e) => set("to", e.target.value)} />
           </div>
           <div className="col-span-2">
@@ -389,11 +398,23 @@ export function EnergyForm({
             <div key={k} className="col-span-2 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/20 p-2.5">
               <div className="col-span-2 -mb-1 text-xs font-semibold" style={{ color: KIND[k].color }}>
                 {KIND[k].icon} {KIND[k].label}
-                {days && Number(amount[k]) > 0 && (
+                {daysOf(k) && Number(amount[k]) > 0 && (
                   <span className="ml-2 font-normal text-[var(--ink-3)]">
-                    {(Number(amount[k]) / days).toFixed(2)} {KIND[k].unit.split(" ")[0]}/day
+                    {(Number(amount[k]) / daysOf(k)!).toFixed(2)} {KIND[k].unit.split(" ")[0]}/day
                   </span>
                 )}
+              </div>
+              <div>
+                <label className={label} htmlFor={`ef-from-${k}`}>
+                  {KIND[k].icon} From
+                </label>
+                <input id={`ef-from-${k}`} type="date" required className={input} value={period(k).from} onChange={(e) => setPeriod(k, "from", e.target.value)} />
+              </div>
+              <div>
+                <label className={label} htmlFor={`ef-to-${k}`}>
+                  {KIND[k].icon} To {daysOf(k) ? <span className="normal-case tracking-normal">· {daysOf(k)} days</span> : null}
+                </label>
+                <input id={`ef-to-${k}`} type="date" required min={period(k).from} className={input} value={period(k).to} onChange={(e) => setPeriod(k, "to", e.target.value)} />
               </div>
               <div>
                 <label className={label} htmlFor={`ef-amount-${k}`}>Used ({KIND[k].unit})</label>
