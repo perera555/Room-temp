@@ -778,7 +778,7 @@ export function UtilitiesPanel({
                     </div>
                   )}
                   <div className="flex flex-wrap justify-between gap-x-3">
-                    {(["electricity", "water", "telecom"] as const).map((k) =>
+                    {(["electricity", "water", "telecom", "mobile"] as const).map((k) =>
                       services[u.id]?.[k] === "off" ? (
                         <span key={k} className="text-[var(--ink-3)]">
                           {KIND[k].icon} not in use now
@@ -871,7 +871,7 @@ function ServiceSwitches({
   if (compact) {
     return (
       <div className="space-y-1">
-        {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
+        {(["electricity", "water", "gas", "telecom", "mobile"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
           return (
             <div key={k} className="flex items-center gap-1.5" title={`${KIND[k].label}: ${STATUS[st].long}`}>
@@ -904,7 +904,7 @@ function ServiceSwitches({
     <div className="mb-3">
       <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services · choose the status for each</div>
       <div className="space-y-1.5">
-        {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
+        {(["electricity", "water", "gas", "telecom", "mobile"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
           return (
             <div key={k} className="chip-3d flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/25 px-3 py-2">
@@ -1073,7 +1073,7 @@ function MonthTotals({ utilities, unitId, now }: { utilities: UtilitiesState; un
 function ElecWater({ unit, utilities, services }: { unit: string; utilities: UtilitiesState; services: Services }) {
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-      {(["electricity", "water", "telecom"] as const).map((k) => {
+      {(["electricity", "water", "telecom", "mobile"] as const).map((k) => {
         const e = latest(utilities.entries, unit, k);
         const st = services[unit]?.[k] ?? "in_use";
         const off = st === "off";
