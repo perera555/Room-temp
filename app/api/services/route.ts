@@ -7,7 +7,7 @@ import { UNITS } from "@/lib/units";
  * (older form {"on":true|false} still accepted)
  * Protected by the dashboard password (see proxy.ts) when one is set.
  */
-const KINDS = ["electricity", "water", "gas"];
+const KINDS = ["electricity", "water", "gas", "telecom"];
 const STATUSES = ["in_use", "on_request", "off"] as const;
 
 export async function POST(req: Request) {
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     b = await req.json();
   } catch {}
   if (!UNITS.some((u) => u.id === b.unit)) return Response.json({ error: "Choose a unit" }, { status: 400 });
-  if (!b.kind || !KINDS.includes(b.kind)) return Response.json({ error: "Choose electricity, water or gas" }, { status: 400 });
+  if (!b.kind || !KINDS.includes(b.kind)) return Response.json({ error: "Choose electricity, water, gas or telecom" }, { status: 400 });
   const status = (STATUSES as readonly string[]).includes(b.status ?? "") ? (b.status as (typeof STATUSES)[number]) : b.on === undefined ? null : b.on ? "in_use" : "off";
   if (!status) return Response.json({ error: "status must be in_use, on_request or off" }, { status: 400 });
   await setService(b.unit!, b.kind, status);

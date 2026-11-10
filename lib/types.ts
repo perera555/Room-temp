@@ -72,7 +72,7 @@ export type GasState = {
   learned: boolean; // typicalDays came from real history
 };
 
-export type UtilityKind = "electricity" | "water" | "gas";
+export type UtilityKind = "electricity" | "water" | "gas" | "telecom"; // telecom = internet / phone / data bill
 
 /** One utility reading / bill: usage between two dates. */
 export type UtilityEntry = {
@@ -81,12 +81,19 @@ export type UtilityEntry = {
   kind: UtilityKind;
   from: string; // YYYY-MM-DD
   to: string; // YYYY-MM-DD
-  amount: number; // kWh (electricity), units m³ (water), kg (gas)
+  amount: number; // kWh (electricity), units m³ (water), kg (gas), GB (telecom data)
   cost: number | null; // LKR
   customer: string; // customer / tenant name the bill is for
   account: string; // bill account number (CEB / LECO / water board)
   note: string;
+  month?: string; // bill month YYYY-MM (defaults to the "To" date's month)
+  charges?: { data?: number; calls?: number; tax?: number; other?: number }; // LKR breakdown (telecom etc.)
+  connection?: string; // e.g. "D1" on a multi-line telecom bill
+  image?: string; // id of the saved bill photo (open with /api/bill-image?id=…)
 };
+
+/** Telecom bill connection → unit(s), e.g. D3 shared by Unit 3 and Unit 4. */
+export type TelecomLink = { code: string; units: string[] };
 
 /**
  * Service status per unit:
@@ -103,7 +110,25 @@ export type UtilitiesState = {
   entries: UtilityEntry[]; // newest first
 };
 
+/** Each unit's own address and utility accounts (editable in the app). */
+export type UnitInfo = {
+  address1: string;
+  address2: string;
+  city: string;
+  elecProvider: string; // CEB / LECO
+  elecAccount: string;
+  waterProvider: string; // NWSDB (water board) / local council
+  waterAccount: string;
+  gasSupplier: string; // Litro / Laugfs
+  telecomProvider: string; // SLT-Mobitel / Dialog / Hutch / Airtel
+  telecomAccount: string;
+  notes: string;
+};
+
 export type DashboardData = {
+  unitInfo: Record<string, UnitInfo>;
+  telecomMap: TelecomLink[];
+  billScan: boolean; // true when bill photo reading (ANTHROPIC_API_KEY) is set up
   alerts: {
     hot: number; // too hot at or above °C
     cold: number; // too cold at or below °C

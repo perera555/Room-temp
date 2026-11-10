@@ -25,6 +25,8 @@ import {
 import { EnergyRecords, UtilitiesPanel, lowestGas } from "./Utilities";
 import { WallView } from "./WallView";
 import { AlertAnnouncer, AlertBar, AlertsPanel, findTempAlerts } from "./Alerts";
+import { MonthlyCosts, UnitsAccountsPanel } from "./UnitAccounts";
+import { TelecomMapPanel } from "./BillScan";
 import { flushOutbox, onOutboxChange, outboxCount } from "@/lib/outbox";
 
 const OUTSIDE = "#9085e9";
@@ -138,6 +140,9 @@ function normalize(j: DashboardData): DashboardData {
     gas: gas.filter((g) => g && Array.isArray(g.changes)),
     utilities: j.utilities && Array.isArray(j.utilities.entries) ? j.utilities : { source: "demo", canRecord: false, entries: [] },
     // older cached data used true/false; convert to the three statuses
+    unitInfo: j.unitInfo && typeof j.unitInfo === "object" ? j.unitInfo : {},
+    telecomMap: Array.isArray(j.telecomMap) ? j.telecomMap : [],
+    billScan: Boolean(j.billScan),
     services: Object.fromEntries(
       Object.entries(j.services && typeof j.services === "object" ? j.services : {}).map(([u, kinds]) => [
         u,
@@ -527,7 +532,7 @@ function Body({
         </Panel>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} services={data.services} now={now.getTime()} onChanged={onReload} />
+          <UtilitiesPanel gas={data.gas} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} services={data.services} unitInfo={data.unitInfo} telecomMap={data.telecomMap} billScan={data.billScan} now={now.getTime()} onChanged={onReload} />
 
           <AlertsPanel data={data} />
 
@@ -642,7 +647,13 @@ function Body({
 
       {!unit && <AirbnbRooms units={data.units} bookings={data.bookings} todayKey={todayKey} onOpen={onOpen} />}
 
-      <EnergyRecords key={unit?.id ?? "all"} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} location={data.location} services={data.services} onChanged={onReload} />
+      <EnergyRecords key={unit?.id ?? "all"} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} location={data.location} services={data.services} unitInfo={data.unitInfo} telecomMap={data.telecomMap} billScan={data.billScan} onChanged={onReload} />
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <MonthlyCosts key={`mc-${unit?.id ?? "all"}`} utilities={data.utilities} units={data.units} unitId={unit?.id ?? null} />
+        {!unit && <UnitsAccountsPanel units={data.units} unitInfo={data.unitInfo} onSaved={onReload} />}
+        {!unit && <TelecomMapPanel key={JSON.stringify(data.telecomMap)} units={data.units} telecomMap={data.telecomMap} onSaved={onReload} />}
+      </div>
     </>
   );
 }

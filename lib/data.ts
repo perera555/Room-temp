@@ -12,11 +12,13 @@ import type {
   UnitData,
   ServiceStatus,
   Services,
+  TelecomLink,
+  UnitInfo,
   UtilitiesState,
   UtilityEntry,
 } from "./types";
 import { UNITS, airbnbRoomsFor, airbnbUnitIds, gasUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
-import { loadGasChanges, loadReadings, loadServiceOverrides, loadUtilityEntries, storeEnabled } from "./store";
+import { loadGasChanges, loadReadings, loadServiceOverrides, loadTelecomMap, loadUnitInfo, loadUtilityEntries, storeEnabled } from "./store";
 import { alertSettings } from "./alerts";
 
 const HOUR = 3_600_000;
@@ -557,6 +559,39 @@ const gasUnits = () => {
   return UNITS.filter((u) => ids.includes(u.id));
 };
 
+/** Each unit's address and utility accounts (saved in the app; empty until filled in). */
+async function getUnitInfo(): Promise<Record<string, UnitInfo>> {
+  let saved: Record<string, Record<string, string>> = {};
+  if (storeEnabled()) {
+    try {
+      saved = await loadUnitInfo();
+    } catch (err) {
+      console.error("[dashboard] unit info failed:", err);
+    }
+  }
+  return Object.fromEntries(
+    UNITS.map((u) => {
+      const s = saved[u.id] ?? {};
+      return [
+        u.id,
+        {
+          address1: s.address1 ?? "",
+          address2: s.address2 ?? "",
+          city: s.city ?? "",
+          elecProvider: s.elecProvider || "CEB",
+          elecAccount: s.elecAccount ?? "",
+          waterProvider: s.waterProvider || "NWSDB",
+          waterAccount: s.waterAccount ?? "",
+          gasSupplier: s.gasSupplier || "Litro",
+          telecomProvider: s.telecomProvider || "SLT-Mobitel",
+          telecomAccount: s.telecomAccount ?? "",
+          notes: s.notes ?? "",
+        },
+      ];
+    }),
+  );
+}
+
 /**
  * Services in use per unit. Defaults: electricity + water for every unit,
  * gas for GAS_UNITS (Unit 1). Switches saved in the app override these.
@@ -578,6 +613,7 @@ async function getServices(): Promise<Services> {
         electricity: overrides[u.id]?.electricity ?? "in_use",
         water: overrides[u.id]?.water ?? "in_use",
         gas: overrides[u.id]?.gas ?? (gasIds.includes(u.id) ? "in_use" : "off"),
+        telecom: overrides[u.id]?.telecom ?? "in_use",
       },
     ]),
   );
@@ -631,6 +667,8 @@ function demoUtilities(now: number): UtilityEntry[] {
       const kwh = Math.round((150 + hash(ui * 10 + m) * 90) * busy);
       out.push({ id: `demo-e-${u.id}-${m}`, unit: u.id, kind: "electricity", from: f, to: t, amount: kwh, cost: Math.round(kwh * 42 + 400), customer: OWNER(u), account: "", note: "Sample CEB bill" });
       const water = Math.round((12 + hash(ui * 20 + m) * 10) * (u.id === "unit5" ? 0.5 : 1));
+      const gb = Math.round(60 + hash(ui * 30 + m) * 90);
+      out.push({ id: `demo-t-${u.id}-${m}`, unit: u.id, kind: "telecom", from: f, to: t, amount: gb, cost: gb > 100 ? 4990 : 3490, customer: OWNER(u), account: "", note: "Sample SLT-Mobitel fibre" });
       out.push({ id: `demo-w-${u.id}-${m}`, unit: u.id, kind: "water", from: f, to: t, amount: water, cost: Math.round(water * 95 + 300), customer: OWNER(u), account: "", note: "Sample water bill" });
     });
   }
@@ -700,6 +738,20 @@ export async function getDashboardData(): Promise<DashboardData> {
     ]);
 
   const services = await getServices();
+  const unitInfo = await getUnitInfo();
+  // telecom bill connections: D1 → Unit 2, D2 → Unit 3, D3 → Units 3 & 4 (shared) unless changed in the app
+  let telecomMap: TelecomLink[] = [
+    { code: "D1", units: ["unit2"] },
+    { code: "D2", units: ["unit3"] },
+    { code: "D3", units: ["unit3", "unit4"] },
+  ];
+  if (storeEnabled()) {
+    try {
+      telecomMap = (await loadTelecomMap()) ?? telecomMap;
+    } catch (err) {
+      console.error("[dashboard] telecom map failed:", err);
+    }
+  }
   const [gas, utilities] = await Promise.all([getGas(now, services), getUtilities(now)]);
 
   return {
@@ -709,6 +761,9 @@ export async function getDashboardData(): Promise<DashboardData> {
     utilities,
     services,
     alerts: alertSettings(),
+    unitInfo,
+    telecomMap,
+    billScan: Boolean(env.ANTHROPIC_API_KEY),
     sources: {
       rooms: roomsSrc,
       outside: outsideSrc,

@@ -224,6 +224,31 @@ Content-Type: application/json
           days and usage per day. Filter the list by unit or type, and delete wrong entries with 🗑.
         </p>
         <p>
+          <b>Each unit separately: address &amp; accounts.</b> On a unit’s page (or in the “Units · addresses &amp; utility accounts”
+          list) press <b>✎ Edit</b> and enter address line 1, line 2 and city, the <b>⚡ electricity account</b> (CEB / LECO), the
+          <b> 💧 water supply account</b> (NWSDB / council), the <b>📶 telecom / data account</b> (SLT-Mobitel, Dialog, Hutch, Airtel)
+          and the gas supplier. <b>+ Add record</b> then fills in the right account number automatically.
+        </p>
+        <p>
+          <b>📶 Telecom / data bills</b> work exactly like electricity and water: From → To, data used (GB), cost in LKR.
+          <b> Monthly costs:</b> the Energy panel shows <b>this month’s and last month’s total</b>, and the “Monthly costs (LKR)” table
+          shows every month per unit (⚡ 💧 🔥 📶 and total). A bill counts in the month of its “To” date. Both are also in the
+          printed report.
+        </p>
+        <p>
+          <b>📷 Import a paid bill (reads the photo for you):</b> press <b>📷 Import bill</b>, take a photo of the bill (or choose a
+          PDF). The app reads the provider, account, period, bill month and every charge (data, calls, tax…), then shows it for you to
+          check. Press <b>Save</b> and the records are added to Energy, with the bill photo attached (📎 in the records list).
+          Telecom lines are sent to units by connection: <b>D1 → Unit 2, D2 → Unit 3, D3 → Unit 3 + Unit 4</b> (shared, split
+          equally). Change this in “📶 Telecom bill connections”. Other bills are matched by account number.
+        </p>
+        <p className="rounded-xl border border-violet-400/30 bg-violet-500/10 p-3 text-sm">
+          <b>Setup for bill reading:</b> create an API key at <b>console.anthropic.com</b> → API Keys (pay as you go; one bill costs only a
+          few rupees). In Vercel add <code>ANTHROPIC_API_KEY</code> = that key, then Redeploy. Photos are saved in the Upstash database.
+          You can also attach a photo to any record later with <b>📎+</b>, and pick <b>From month → To month</b> in “Monthly costs” to
+          print or download (Excel) any range.
+        </p>
+        <p>
           <b>Services checklist:</b> each unit has checkboxes ☑ Electricity ☑ Water ☐ Gas. Ticked = in use. Unticked = “Not in use now ·
           available on request”. By default only <b>Unit 1</b> uses gas. When another unit starts using gas, press <b>🔥 Start gas</b>
           (or tick Gas) and record its first cylinder. In <b>+ Add record</b> you can tick several services at once (each with its

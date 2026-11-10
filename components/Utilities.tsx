@@ -3,7 +3,10 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { sendOrQueue } from "@/lib/outbox";
-import type { GasState, ServiceStatus, Services, UnitData, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
+import type { GasState, ServiceStatus, Services, TelecomLink, UnitData, UnitInfo, UtilitiesState, UtilityEntry, UtilityKind } from "@/lib/types";
+import { UnitDetailsCard, billMonth, monthName, monthlyCosts } from "./UnitAccounts";
+import { BillScanButton } from "./BillScan";
+import { billImageUrl, uploadBill } from "@/lib/billImage";
 
 const DAY = 86_400_000;
 const fmt = (t: number) => new Date(t).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
@@ -14,6 +17,7 @@ export const KIND: Record<UtilityKind, { label: string; icon: string; unit: stri
   electricity: { label: "Electricity", icon: "⚡", unit: "kWh", color: "#facc15" },
   water: { label: "Water", icon: "💧", unit: "units (m³)", color: "#38bdf8" },
   gas: { label: "Gas", icon: "🔥", unit: "kg", color: "#fb923c" },
+  telecom: { label: "Telecom / data", icon: "📶", unit: "GB", color: "#a78bfa" },
 };
 
 export const daysIn = (e: UtilityEntry) =>
@@ -105,12 +109,18 @@ function Ring({ pct, level }: { pct: number; level: string }) {
 export function EnergyForm({
   units,
   services,
+  unitInfo = {},
+  telecomMap = [],
+  billScan = false,
   defaultUnit,
   onClose,
   onSaved,
 }: {
   units: UnitData[];
   services: Services; // which services each unit uses
+  unitInfo?: Record<string, UnitInfo>; // each unit's accounts, to pre-fill
+  telecomMap?: TelecomLink[]; // for the "Scan a bill" shortcut
+  billScan?: boolean;
   defaultUnit?: string;
   onClose: () => void;
   onSaved: () => void;
@@ -126,16 +136,30 @@ export function EnergyForm({
     from: iso(monthStart),
     to: iso(monthEnd),
     customer: firstUnit?.owner ?? "",
-    account: "",
     note: "",
   });
   // checklist: which services this record covers, each with its own amount + cost
   // nothing pre-ticked: only services the user ticks ask for an amount
-  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false });
-  const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5" });
-  const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "" });
+  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false, telecom: false });
+  const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5", telecom: "" });
+  const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "", telecom: "" });
   // "Status in this unit" field: In use / On request / Not in use now ("" = leave as it is)
-  const [statusSel, setStatusSel] = useState<Record<UtilityKind, "" | ServiceStatus>>({ electricity: "", water: "", gas: "" });
+  const [statusSel, setStatusSel] = useState<Record<UtilityKind, "" | ServiceStatus>>({ electricity: "", water: "", gas: "", telecom: "" });
+  // each service has its own account no. (electricity / water supply), filled from the unit's details
+  const accountsFor = (unitId: string): Record<UtilityKind, string> => ({
+    electricity: unitInfo[unitId]?.elecAccount ?? "",
+    water: unitInfo[unitId]?.waterAccount ?? "",
+    gas: "",
+    telecom: unitInfo[unitId]?.telecomAccount ?? "",
+  });
+  const [acct, setAcct] = useState<Record<UtilityKind, string>>(() => accountsFor(firstUnit?.id ?? ""));
+  // bill month (YYYY-MM) - follows the "To" date unless changed by hand
+  const [billM, setBillM] = useState<string>("");
+  const monthOf = billM || f.to.slice(0, 7);
+  // telecom bill: separate charges and connection (D1 / D2 / D3)
+  const [tc, setTc] = useState({ data: "", calls: "", tax: "", other: "", connection: "" });
+  const [photo, setPhoto] = useState<File | null>(null); // optional bill photo
+  const tcSum = ["data", "calls", "tax", "other"].reduce((a, k) => a + (Number(tc[k as keyof typeof tc]) || 0), 0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -158,7 +182,8 @@ export function EnergyForm({
             setErr("Tick a service to add its bill, or choose a status (In use / On request / Not in use now)");
             return;
           }
-          const missing = chosen.filter((k) => amount[k].trim() === "");
+          // telecom bills often don't show GB used, so a blank amount is fine there (saved as 0)
+          const missing = chosen.filter((k) => k !== "telecom" && amount[k].trim() === "");
           if (missing.length) {
             setErr(`Enter “Used” for ${missing.map((k) => KIND[k].label).join(" and ")}, or untick it`);
             return;
@@ -166,9 +191,28 @@ export function EnergyForm({
           setBusy(true);
           setErr(null);
           try {
+            // bill photo (optional) is saved once and linked to each record
+            let image: string | null = null;
+            if (photo && chosen.length) {
+              try {
+                image = await uploadBill(photo);
+              } catch {
+                image = null;
+              }
+            }
             // one record per ticked service
             for (const k of chosen) {
-              await post("/api/utilities", { ...f, kind: k, amount: Number(amount[k]), cost: cost[k] === "" ? null : Number(cost[k]) });
+              const isTel = k === "telecom";
+              await post("/api/utilities", {
+                ...f,
+                kind: k,
+                month: monthOf,
+                account: acct[k],
+                amount: Number(amount[k]),
+                cost: cost[k] === "" ? (isTel && tcSum ? tcSum : null) : Number(cost[k]),
+                image: image ?? undefined,
+                ...(isTel ? { connection: tc.connection, charges: { data: tc.data, calls: tc.calls, tax: tc.tax, other: tc.other } } : {}),
+              });
             }
             // status chosen for this unit (saved after the records, so it wins)
             for (const k of statusChanges) {
@@ -184,11 +228,26 @@ export function EnergyForm({
         }}
         className="card-3d max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-2xl p-5 hover:!translate-y-0"
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex items-center justify-between gap-2">
           <h2 className="text-lg font-semibold text-white">Add energy record</h2>
-          <button type="button" onClick={onClose} className="rounded-full px-2 text-xl text-[var(--ink-3)] hover:text-white" aria-label="Close">
-            ×
-          </button>
+          <div className="flex items-center gap-2">
+            {/* shortcut: scan / upload the bill instead of typing it */}
+            <BillScanButton
+              units={units}
+              unitInfo={unitInfo}
+              telecomMap={telecomMap}
+              enabled={billScan}
+              defaultUnit={f.unit}
+              label="📸 Scan a bill"
+              onSaved={() => {
+                onSaved();
+                onClose();
+              }}
+            />
+            <button type="button" onClick={onClose} className="rounded-full px-2 text-xl text-[var(--ink-3)] hover:text-white" aria-label="Close">
+              ×
+            </button>
+          </div>
         </div>
 
         <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Services · tick one or more</div>
@@ -256,6 +315,7 @@ export function EnergyForm({
               onChange={(e) => {
                 const u = units.find((x) => x.id === e.target.value);
                 setF((p) => ({ ...p, unit: e.target.value, customer: p.customer && p.customer !== (units.find((x) => x.id === p.unit)?.owner ?? "") ? p.customer : u?.owner ?? "" }));
+                setAcct(accountsFor(e.target.value)); // this unit's own account numbers
               }}
             >
               {units.map((u) => (
@@ -278,6 +338,10 @@ export function EnergyForm({
           <div>
             <label className={label} htmlFor="ef-to">To</label>
             <input id="ef-to" type="date" required min={f.from} className={input} value={f.to} onChange={(e) => set("to", e.target.value)} />
+          </div>
+          <div className="col-span-2">
+            <label className={label} htmlFor="ef-month">Bill month (shows in monthly costs)</label>
+            <input id="ef-month" type="month" className={input} value={monthOf} onChange={(e) => setBillM(e.target.value)} />
           </div>
           {chosen.length === 0 && (
             <p className="col-span-2 rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-[var(--ink-3)]">
@@ -321,15 +385,72 @@ export function EnergyForm({
                   placeholder="optional"
                 />
               </div>
+              {k === "telecom" && (
+                <div className="col-span-2 grid grid-cols-5 gap-2">
+                  {(
+                    [
+                      ["connection", "Connection", "D1"],
+                      ["data", "📱 Data", ""],
+                      ["calls", "📞 Calls", ""],
+                      ["tax", "🧾 Tax", ""],
+                      ["other", "Other", ""],
+                    ] as const
+                  ).map(([key, l, ph]) => (
+                    <div key={key}>
+                      <label className={label} htmlFor={`ef-tc-${key}`}>
+                        {l}
+                      </label>
+                      <input
+                        id={`ef-tc-${key}`}
+                        className={input}
+                        type={key === "connection" ? "text" : "number"}
+                        step="any"
+                        min="0"
+                        inputMode={key === "connection" ? "text" : "decimal"}
+                        value={tc[key]}
+                        placeholder={ph || "LKR"}
+                        onChange={(e) => setTc((p) => ({ ...p, [key]: e.target.value }))}
+                      />
+                    </div>
+                  ))}
+                  {tcSum > 0 && cost.telecom === "" && (
+                    <p className="col-span-5 -mt-1 text-[11px] text-violet-200">Cost = data + calls + tax + other = LKR {Math.round(tcSum).toLocaleString()}</p>
+                  )}
+                </div>
+              )}
+              <div className="col-span-2">
+                <label className={label} htmlFor={`ef-acct-${k}`}>
+                  {k === "electricity"
+                    ? `Electricity account no. (${unitInfo[f.unit]?.elecProvider ?? "CEB"})`
+                    : k === "water"
+                      ? `Water supply account no. (${unitInfo[f.unit]?.waterProvider ?? "NWSDB"})`
+                      : k === "telecom"
+                        ? `Telecom / data account no. (${unitInfo[f.unit]?.telecomProvider ?? "SLT-Mobitel"})`
+                        : `Gas receipt / ref. (${unitInfo[f.unit]?.gasSupplier ?? "Litro"})`}
+                </label>
+                <input
+                  id={`ef-acct-${k}`}
+                  className={input}
+                  value={acct[k]}
+                  onChange={(e) => setAcct((p) => ({ ...p, [k]: e.target.value }))}
+                  placeholder={k === "gas" ? "optional" : "from the unit's details, or type it"}
+                />
+              </div>
             </div>
           ))}
-          <div>
+          <div className="col-span-2">
             <label className={label} htmlFor="ef-customer">Customer</label>
             <input id="ef-customer" className={input} value={f.customer} onChange={(e) => set("customer", e.target.value)} placeholder="Name on the bill" />
           </div>
-          <div>
-            <label className={label} htmlFor="ef-account">Account no.</label>
-            <input id="ef-account" className={input} value={f.account} onChange={(e) => set("account", e.target.value)} placeholder="CEB / water a/c no." />
+          <div className="col-span-2">
+            <label className={label} htmlFor="ef-photo">📎 Bill photo (optional)</label>
+            <input
+              id="ef-photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              className="block w-full text-xs text-[var(--ink-2)] file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-white"
+              onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
+            />
           </div>
           <div className="col-span-2">
             <label className={label} htmlFor="ef-note">Note</label>
@@ -378,6 +499,9 @@ export function UtilitiesPanel({
   units,
   unitId,
   services,
+  unitInfo = {},
+  telecomMap = [],
+  billScan = false,
   now,
   onChanged,
 }: {
@@ -386,6 +510,9 @@ export function UtilitiesPanel({
   units: UnitData[];
   unitId: string | null;
   services: Services;
+  unitInfo?: Record<string, UnitInfo>;
+  telecomMap?: TelecomLink[];
+  billScan?: boolean;
   now: number;
   onChanged: () => void;
 }) {
@@ -448,12 +575,20 @@ export function UtilitiesPanel({
           {demo && (
             <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">Sample data</span>
           )}
+          <BillScanButton units={units} unitInfo={unitInfo} telecomMap={telecomMap} enabled={billScan} defaultUnit={unitId ?? undefined} onSaved={onChanged} />
           <button onClick={() => setForm(true)} className="rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 px-3 py-1.5 text-xs font-semibold text-white shadow hover:brightness-110">
             + Add record
           </button>
         </div>
       </header>
 
+      <MonthTotals utilities={utilities} unitId={unitId} now={now} />
+
+      {unitId && units.find((u) => u.id === unitId) && (
+        <div className="mb-3">
+          <UnitDetailsCard unit={units.find((u) => u.id === unitId)!} info={unitInfo[unitId]} onSaved={onChanged} />
+        </div>
+      )}
       {unitId && <ServiceSwitches unit={unitId} services={services} busy={busy} onSet={setStatus} />}
 
       {one ? (
@@ -498,7 +633,7 @@ export function UtilitiesPanel({
                     </div>
                   )}
                   <div className="flex flex-wrap justify-between gap-x-3">
-                    {(["electricity", "water"] as const).map((k) =>
+                    {(["electricity", "water", "telecom"] as const).map((k) =>
                       services[u.id]?.[k] === "off" ? (
                         <span key={k} className="text-[var(--ink-3)]">
                           {KIND[k].icon} not in use now
@@ -518,7 +653,7 @@ export function UtilitiesPanel({
         </div>
       )}
       {msg && <p className="mt-2 text-xs text-[var(--ink-2)]">{msg}</p>}
-      {form && <EnergyForm units={units} services={services} defaultUnit={unitId ?? undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
+      {form && <EnergyForm units={units} services={services} unitInfo={unitInfo} telecomMap={telecomMap} billScan={billScan} defaultUnit={unitId ?? undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
       {fitting && (
         <GasFittedForm
           g={fitting}
@@ -596,7 +731,7 @@ function ServiceSwitches({
   if (compact) {
     return (
       <div className="grid grid-cols-3 gap-1.5">
-        {(["electricity", "water", "gas"] as const).map((k) => {
+        {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
           return (
             <button
@@ -617,7 +752,7 @@ function ServiceSwitches({
     <div className="mb-3">
       <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services checklist · tick the status for each</div>
       <div className="space-y-1.5">
-        {(["electricity", "water", "gas"] as const).map((k) => {
+        {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
           return (
             <div key={k} className="chip-3d flex flex-wrap items-center gap-2 rounded-xl border border-white/5 bg-black/25 px-3 py-2">
@@ -646,11 +781,47 @@ function ServiceSwitches({
   );
 }
 
+/** Total cost this month and last month (all services), for one unit or all units. */
+function MonthTotals({ utilities, unitId, now }: { utilities: UtilitiesState; unitId: string | null; now: number }) {
+  const d = new Date(now);
+  const ym = (y: number, m: number) => {
+    const x = new Date(y, m, 1);
+    return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const thisM = ym(d.getFullYear(), d.getMonth());
+  const lastM = ym(d.getFullYear(), d.getMonth() - 1);
+  const rows = monthlyCosts(utilities, unitId ?? "all");
+  const cur = rows.find((r) => r.month === thisM);
+  const prev = rows.find((r) => r.month === lastM);
+  const box = (title: string, r: (typeof rows)[number] | undefined, highlight: boolean) => (
+    <div className={`chip-3d min-w-0 rounded-xl border px-3 py-2 ${highlight ? "border-emerald-400/40 bg-emerald-500/10" : "border-white/5 bg-black/25"}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">{title}</div>
+      <div className="text-xl font-semibold tabular-nums text-white">{r ? lkr(r.total) : "LKR 0"}</div>
+      <div className="flex flex-wrap gap-x-2 text-[11px] tabular-nums text-[var(--ink-2)]">
+        {(Object.keys(KIND) as UtilityKind[]).map((k) =>
+          r && r[k] ? (
+            <span key={k}>
+              {KIND[k].icon} {Math.round(r[k]).toLocaleString()}
+            </span>
+          ) : null,
+        )}
+        {!r && <span className="text-[var(--ink-3)]">no bills yet</span>}
+      </div>
+    </div>
+  );
+  return (
+    <div className="mb-3 grid grid-cols-2 gap-2">
+      {box(`This month · ${monthName(thisM)}`, cur, true)}
+      {box(`Last month · ${monthName(lastM)}`, prev, false)}
+    </div>
+  );
+}
+
 /** Electricity + water latest-record cards for one unit. */
 function ElecWater({ unit, utilities, services }: { unit: string; utilities: UtilitiesState; services: Services }) {
   return (
-    <div className="grid grid-cols-2 gap-2">
-      {(["electricity", "water"] as const).map((k) => {
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {(["electricity", "water", "telecom"] as const).map((k) => {
         const e = latest(utilities.entries, unit, k);
         const st = services[unit]?.[k] ?? "in_use";
         const off = st === "off";
@@ -964,9 +1135,9 @@ function downloadCsv(rows: UtilityEntry[], name: (id: string) => string, filenam
     const s = v == null ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const header = ["Unit", "Type", "From", "To", "Days", "Used", "Measure", "Per day", "Cost (LKR)", "Customer", "Account no", "Note"];
+  const header = ["Bill month", "Unit", "Type", "Connection", "From", "To", "Days", "Used", "Measure", "Per day", "Data (LKR)", "Calls (LKR)", "Tax (LKR)", "Other (LKR)", "Cost (LKR)", "Customer", "Account no", "Note"];
   const lines = rows.map((e) =>
-    [name(e.unit), KIND[e.kind].label, e.from, e.to, daysIn(e), e.amount, KIND[e.kind].unit.split(" ")[0], (e.amount / daysIn(e)).toFixed(2), e.cost, e.customer, e.account, e.note]
+    [billMonth(e), name(e.unit), KIND[e.kind].label, e.connection ?? "", e.from, e.to, daysIn(e), e.amount, KIND[e.kind].unit.split(" ")[0], (e.amount / daysIn(e)).toFixed(2), e.charges?.data ?? null, e.charges?.calls ?? null, e.charges?.tax ?? null, e.charges?.other ?? null, e.cost, e.customer, e.account, e.note]
       .map(q)
       .join(","),
   );
@@ -988,6 +1159,9 @@ export function EnergyRecords({
   unitId,
   location,
   services,
+  unitInfo = {},
+  telecomMap = [],
+  billScan = false,
   onChanged,
 }: {
   utilities: UtilitiesState;
@@ -995,6 +1169,9 @@ export function EnergyRecords({
   unitId: string | null;
   location: string;
   services: Services;
+  unitInfo?: Record<string, UnitInfo>;
+  telecomMap?: TelecomLink[];
+  billScan?: boolean;
   onChanged: () => void;
 }) {
   const [unit, setUnit] = useState<string>(unitId ?? "all");
@@ -1006,6 +1183,18 @@ export function EnergyRecords({
   );
   const total = rows.reduce((a, e) => a + (e.cost ?? 0), 0);
   const name = (id: string) => units.find((u) => u.id === id)?.name ?? id;
+
+  /** Attach a bill photo to a record that is already saved. */
+  async function attach(e: UtilityEntry, file: File) {
+    try {
+      const image = await uploadBill(file);
+      if (!image) return window.alert("No connection: try again when online.");
+      await post("/api/utilities", { id: e.id, image }, "PATCH");
+      onChanged();
+    } catch (x) {
+      window.alert(x instanceof Error ? x.message : "Could not attach the photo");
+    }
+  }
 
   async function remove(e: UtilityEntry) {
     if (!window.confirm(`Delete this ${KIND[e.kind].label.toLowerCase()} record for ${name(e.unit)} (${fmtDay(e.from)} → ${fmtDay(e.to)})?`)) return;
@@ -1057,6 +1246,7 @@ export function EnergyRecords({
           >
             ⬇ Excel (CSV)
           </button>
+          <BillScanButton units={units} unitInfo={unitInfo} telecomMap={telecomMap} enabled={billScan} defaultUnit={unit !== "all" ? unit : undefined} onSaved={onChanged} />
           <button onClick={() => setForm(true)} className="rounded-full bg-gradient-to-r from-sky-500 to-emerald-500 px-3 py-1.5 text-xs font-semibold text-white shadow hover:brightness-110">
             + Add record
           </button>
@@ -1068,6 +1258,7 @@ export function EnergyRecords({
             <tr>
               <th className="px-3 py-2">Unit</th>
               <th className="px-3 py-2">Type</th>
+              <th className="px-3 py-2">Month</th>
               <th className="px-3 py-2">From</th>
               <th className="px-3 py-2">To</th>
               <th className="px-3 py-2 text-right">Days</th>
@@ -1083,7 +1274,7 @@ export function EnergyRecords({
           <tbody className="tabular-nums">
             {rows.length === 0 && (
               <tr>
-                <td colSpan={12} className="px-3 py-6 text-center text-[var(--ink-3)]">
+                <td colSpan={13} className="px-3 py-6 text-center text-[var(--ink-3)]">
                   No records yet. Press + Add record.
                 </td>
               </tr>
@@ -1093,7 +1284,9 @@ export function EnergyRecords({
                 <td className="px-3 py-2 font-medium text-[var(--ink-1)]">{name(e.unit)}</td>
                 <td className="px-3 py-2">
                   <span style={{ color: KIND[e.kind].color }}>{KIND[e.kind].icon}</span> {KIND[e.kind].label}
+                  {e.connection && <span className="ml-1 rounded bg-violet-500/20 px-1 text-[10px] font-semibold text-violet-200">{e.connection}</span>}
                 </td>
+                <td className="px-3 py-2 whitespace-nowrap">{monthName(billMonth(e))}</td>
                 <td className="px-3 py-2">{fmtDay(e.from)}</td>
                 <td className="px-3 py-2">{fmtDay(e.to)}</td>
                 <td className="px-3 py-2 text-right">{daysIn(e)}</td>
@@ -1101,13 +1294,34 @@ export function EnergyRecords({
                   {e.amount} <span className="text-xs text-[var(--ink-3)]">{KIND[e.kind].unit.split(" ")[0]}</span>
                 </td>
                 <td className="px-3 py-2 text-right">{(e.amount / daysIn(e)).toFixed(2)}</td>
-                <td className="px-3 py-2 text-right text-[var(--ink-1)]">{lkr(e.cost)}</td>
+                <td className="px-3 py-2 text-right text-[var(--ink-1)]" title={e.charges ? `Data ${e.charges.data ?? 0} · Calls ${e.charges.calls ?? 0} · Tax ${e.charges.tax ?? 0} · Other ${e.charges.other ?? 0}` : undefined}>
+                  {lkr(e.cost)}
+                  {e.charges && (
+                    <div className="text-[10px] text-[var(--ink-3)]">
+                      {e.charges.data ? `📱${Math.round(e.charges.data)} ` : ""}
+                      {e.charges.calls ? `📞${Math.round(e.charges.calls)} ` : ""}
+                      {e.charges.tax ? `🧾${Math.round(e.charges.tax)}` : ""}
+                    </div>
+                  )}
+                </td>
                 <td className="max-w-40 truncate px-3 py-2">{e.customer || "—"}</td>
                 <td className="px-3 py-2 text-[var(--ink-3)]">{e.account || "—"}</td>
                 <td className="max-w-48 truncate px-3 py-2 text-[var(--ink-3)]" title={e.note}>
                   {e.note || "—"}
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="whitespace-nowrap px-3 py-2 text-right">
+                  {e.image ? (
+                    <a href={billImageUrl(e.image)} target="_blank" rel="noreferrer" className="rounded px-1.5 text-sky-300 hover:text-white" title="Open the bill photo">
+                      📎
+                    </a>
+                  ) : (
+                    utilities.source === "live" && (
+                      <label className="cursor-pointer rounded px-1.5 text-[var(--ink-3)] hover:text-white" title="Attach a bill photo">
+                        📎+
+                        <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" className="sr-only" onChange={(ev) => ev.target.files?.[0] && attach(e, ev.target.files[0])} />
+                      </label>
+                    )
+                  )}
                   {utilities.source === "live" && (
                     <button onClick={() => remove(e)} className="rounded px-2 text-[var(--ink-3)] hover:text-red-300" aria-label="Delete record" title="Delete">
                       🗑
@@ -1120,7 +1334,7 @@ export function EnergyRecords({
           {rows.length > 0 && (
             <tfoot className="border-t border-white/10 bg-black/30 text-sm">
               <tr>
-                <td colSpan={7} className="px-3 py-2 text-right text-[var(--ink-3)]">
+                <td colSpan={8} className="px-3 py-2 text-right text-[var(--ink-3)]">
                   Total cost ({rows.length} records)
                 </td>
                 <td className="px-3 py-2 text-right font-semibold text-[var(--ink-1)]">{lkr(total)}</td>
@@ -1130,7 +1344,7 @@ export function EnergyRecords({
           )}
         </table>
       </div>
-      {form && <EnergyForm units={units} services={services} defaultUnit={unit !== "all" ? unit : undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
+      {form && <EnergyForm units={units} services={services} unitInfo={unitInfo} telecomMap={telecomMap} billScan={billScan} defaultUnit={unit !== "all" ? unit : undefined} onClose={() => setForm(false)} onSaved={onChanged} />}
     </section>
   );
 }

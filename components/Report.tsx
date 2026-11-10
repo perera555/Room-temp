@@ -5,6 +5,7 @@ import type { DashboardData, UtilityKind } from "@/lib/types";
 import { findOverbookings } from "./Units";
 import { KIND, daysIn, gasSummary } from "./Utilities";
 import { describe } from "./Weather";
+import { addressLine, monthName, monthlyCosts } from "./UnitAccounts";
 
 const day = (k: string) => new Date(k + "T12:00:00").toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 const lkr = (n: number | null) => (n == null ? "—" : `LKR ${Math.round(n).toLocaleString()}`);
@@ -131,6 +132,35 @@ export function Report() {
         </tbody>
       </table>
 
+      <h2>1b. Addresses &amp; utility accounts</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Unit</th>
+            <th>Address</th>
+            <th>Electricity account</th>
+            <th>Water supply account</th>
+            <th>Telecom / data</th>
+            <th>Gas supplier</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.units.map((u) => {
+            const i = data.unitInfo?.[u.id];
+            return (
+              <tr key={u.id}>
+                <td><b>{u.name}</b></td>
+                <td>{addressLine(i) || "—"}</td>
+                <td>{i?.elecAccount ? `${i.elecProvider} ${i.elecAccount}` : "—"}</td>
+                <td>{i?.waterAccount ? `${i.waterProvider} ${i.waterAccount}` : "—"}</td>
+                <td>{i?.telecomAccount ? `${i.telecomProvider} ${i.telecomAccount}` : "—"}</td>
+                <td>{i?.gasSupplier ?? "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
       <h2>2. Room temperature &amp; humidity (last 24 hours)</h2>
       <table>
         <thead>
@@ -236,7 +266,7 @@ export function Report() {
         </tbody>
       </table>
 
-      <h2>5. Energy records (electricity, water, gas)</h2>
+      <h2>5. Energy records (electricity, water, gas, telecom / data)</h2>
       <div className="mb-2 flex flex-wrap gap-4 text-xs">
         {(Object.keys(KIND) as UtilityKind[]).map((k) => {
           const r = data.utilities.entries.filter((e) => e.kind === k);
@@ -297,6 +327,48 @@ export function Report() {
           </tr>
         </tfoot>
       </table>
+
+      <h2>5b. Monthly costs per unit (LKR)</h2>
+      {[{ id: "all", name: "All units" }, ...data.units].map((u) => {
+        const rows = monthlyCosts(data.utilities, u.id).slice(0, 12);
+        if (!rows.length) return null;
+        const tot = rows.reduce((a, r) => a + r.total, 0);
+        return (
+          <div key={u.id} style={{ breakInside: "avoid" }} className="mb-3">
+            <div className="mb-1 mt-3 font-semibold">{u.name}</div>
+            <table>
+              <thead>
+                <tr>
+                  <th>Month</th>
+                  <th className="n">Electricity</th>
+                  <th className="n">Water</th>
+                  <th className="n">Gas</th>
+                  <th className="n">Telecom</th>
+                  <th className="n">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.month}>
+                    <td>{monthName(r.month)}</td>
+                    <td className="n">{r.electricity ? lkr(r.electricity) : "–"}</td>
+                    <td className="n">{r.water ? lkr(r.water) : "–"}</td>
+                    <td className="n">{r.gas ? lkr(r.gas) : "–"}</td>
+                    <td className="n">{r.telecom ? lkr(r.telecom) : "–"}</td>
+                    <td className="n"><b>{lkr(r.total)}</b></td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={5} className="n"><b>Total ({rows.length} months) · average {lkr(tot / rows.length)} / month</b></td>
+                  <td className="n"><b>{lkr(tot)}</b></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        );
+      })}
 
       <h2>6. Weather</h2>
       <p>

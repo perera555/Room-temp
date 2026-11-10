@@ -71,6 +71,69 @@ export async function deleteUtilityEntry(id: string) {
   return Boolean(match);
 }
 
+/* ---------------- Unit addresses & utility accounts ---------------- */
+const UNIT_INFO_KEY = "rt:unitinfo";
+
+export async function loadUnitInfo(): Promise<Record<string, Record<string, string>>> {
+  const [res] = await pipeline([["GET", UNIT_INFO_KEY]]);
+  try {
+    return res?.result ? JSON.parse(res.result as string) : {};
+  } catch {
+    return {};
+  }
+}
+
+export async function saveUnitInfo(unit: string, info: Record<string, string>) {
+  const all = await loadUnitInfo();
+  all[unit] = info;
+  await pipeline([["SET", UNIT_INFO_KEY, JSON.stringify(all)]]);
+}
+
+/* ---------------- Bill photos (compressed data URLs) ---------------- */
+const billImgKey = (id: string) => `rt:billimg:${id}`;
+
+export async function saveBillImage(id: string, dataUrl: string) {
+  await pipeline([["SET", billImgKey(id), dataUrl]]);
+}
+
+export async function loadBillImage(id: string): Promise<string | null> {
+  const [res] = await pipeline([["GET", billImgKey(id)]]);
+  return (res?.result as string) ?? null;
+}
+
+/** Change fields of one saved utility record (e.g. attach a bill photo later). */
+export async function updateUtilityEntry(id: string, patch: Record<string, unknown>) {
+  const [res] = await pipeline([["LRANGE", UTIL_KEY, 0, -1]]);
+  const list = (res?.result as string[]) ?? [];
+  const i = list.findIndex((s) => {
+    try {
+      return JSON.parse(s).id === id;
+    } catch {
+      return false;
+    }
+  });
+  if (i < 0) return false;
+  const next = { ...JSON.parse(list[i]), ...patch };
+  await pipeline([["LSET", UTIL_KEY, i, JSON.stringify(next)]]);
+  return true;
+}
+
+/* ---------------- Telecom bill connections (D1, D2, D3 → units) ---------------- */
+const TELECOM_MAP_KEY = "rt:telecom-map";
+
+export async function loadTelecomMap(): Promise<{ code: string; units: string[] }[] | null> {
+  const [res] = await pipeline([["GET", TELECOM_MAP_KEY]]);
+  try {
+    return res?.result ? JSON.parse(res.result as string) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveTelecomMap(map: { code: string; units: string[] }[]) {
+  await pipeline([["SET", TELECOM_MAP_KEY, JSON.stringify(map)]]);
+}
+
 /* ---------------- Temperature alert state (one key per room) ---------------- */
 export type AlertMemory = { kind: "hot" | "cold"; sentAt: number };
 
