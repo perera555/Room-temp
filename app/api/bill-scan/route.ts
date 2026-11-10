@@ -24,7 +24,7 @@ const LineSchema = z.object({
 });
 
 const BillSchema = z.object({
-  kind: z.enum(["electricity", "water", "telecom", "gas", "other"]),
+  kind: z.enum(["electricity", "water", "telecom", "mobile", "gas", "other"]),
   provider: z.string().describe("e.g. CEB, LECO, NWSDB, SLT-Mobitel, Dialog, Hutch, Airtel, Litro, Laugfs"),
   account_number: z.string(),
   customer_name: z.string(),
@@ -41,12 +41,14 @@ const BillSchema = z.object({
 
 export type ScannedBill = z.infer<typeof BillSchema>;
 
-const PROMPT = `This is a utility bill from Sri Lanka (amounts in LKR). Read it and fill in every field.
+const PROMPT = `This is a utility bill or a usage screenshot from Sri Lanka (amounts in LKR). Read it and fill in every field.
 - Bill types: electricity (CEB / LECO), water (NWSDB / council), telecom, internet, mobile or data package (SLT-Mobitel, Mobitel, Dialog, Hutch, Airtel), gas (Litro / Laugfs receipt).
 - Dates as YYYY-MM-DD. If only a month is shown, use its first and last day.
-- Mobile / data bills and reload or data-package receipts (Mobitel, Dialog, Hutch, Airtel) are "telecom": put the mobile number in "connection" and the package name in "description".
+- Home WiFi / fibre / home phone (fixed line) bills are "telecom": put each line or connection code (e.g. D1, D2, D3) in "connection".
+- Personal mobile phone bills and reload or data-package receipts (Mobitel, Dialog, Hutch, Airtel) are "mobile": put the mobile number in "connection" and the package name in "description".
 - If the bill lists several connections (for example D1, D2, D3, or separate phone numbers), make one line per connection with its own data, call, tax and total. If the bill covers one connection, make a single line with connection "".
 - Put taxes and levies in "tax", calls/SMS in "call_charge", data/internet/rental in "data_charge", anything else in "other_charge".
+- It may also be a USAGE SCREENSHOT from an app or website (MySLT, MyDialog, Mobitel Selfcare, Hutch, Airtel) instead of a bill. Then: kind "telecom" for home broadband / WiFi / home phone, "mobile" for a mobile number; put the GB used in "usage" (convert MB to GB) with usage_unit "GB"; the account or phone number in "connection"; the package name in "description"; the usage period in period_from / period_to (if only "this month" is shown, use the current month); amounts 0 unless a charge is shown.
 - Use numbers only (no commas or currency signs). Use 0 for anything not on the bill. Never guess a value you cannot read; mention it in confidence_notes instead.`;
 
 const MEDIA = ["image/jpeg", "image/png", "image/webp", "image/gif"] as const;

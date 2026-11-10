@@ -8,7 +8,7 @@ import { UNITS } from "@/lib/units";
  * DELETE /api/utilities?id=…
  * Protected by the dashboard password (see proxy.ts) when one is set.
  */
-const KINDS: UtilityKind[] = ["electricity", "water", "gas", "telecom"];
+const KINDS: UtilityKind[] = ["electricity", "water", "gas", "telecom", "mobile"];
 /** Optional LKR breakdown: data / calls / tax / other (non-negative numbers only). */
 function charges(v: unknown): UtilityEntry["charges"] {
   if (!v || typeof v !== "object") return undefined;

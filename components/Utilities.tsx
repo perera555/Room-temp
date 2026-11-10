@@ -17,8 +17,12 @@ export const KIND: Record<UtilityKind, { label: string; icon: string; unit: stri
   electricity: { label: "Electricity", icon: "⚡", unit: "kWh", color: "#facc15" },
   water: { label: "Water", icon: "💧", unit: "units (m³)", color: "#38bdf8" },
   gas: { label: "Gas", icon: "🔥", unit: "kg", color: "#fb923c" },
-  telecom: { label: "Telecom / data", icon: "📶", unit: "GB", color: "#a78bfa" },
+  telecom: { label: "Home WiFi / phone", icon: "📶", unit: "GB", color: "#a78bfa" }, // fixed line D1/D2/D3: home WiFi data + home phone
+  mobile: { label: "Mobile", icon: "📱", unit: "GB", color: "#f472b6" }, // personal mobile numbers: calls + data
 };
+
+type Tc = { data: string; calls: string; tax: string; other: string; connection: string };
+const tcSumOf = (tc: Tc) => (["data", "calls", "tax", "other"] as const).reduce((a, k) => a + (Number(tc[k]) || 0), 0);
 
 export const daysIn = (e: UtilityEntry) =>
   Math.max(1, Math.round((Date.parse(e.to + "T00:00:00Z") - Date.parse(e.from + "T00:00:00Z")) / DAY) + 1);
@@ -26,11 +30,26 @@ export const daysIn = (e: UtilityEntry) =>
 export function gasSummary(gas: GasState, now: number) {
   const last = gas.changes.at(-1) ?? now;
   const days = Math.max(0, (now - last) / DAY);
+  // ⚖ a scale reading taken since this cylinder was fitted is better than the estimate
+  const w = (gas.weighIns ?? []).filter((x) => x.t >= last).at(-1);
+  if (w) {
+    const kgLeft = Math.max(0, Math.min(gas.sizeKg, w.gross - w.tare));
+    const usedDays = Math.max(1, (w.t - last) / DAY);
+    const used = gas.sizeKg - kgLeft;
+    // real usage per day since fitting; fall back to the usual cylinder life if too early to tell
+    const perDay = used > 0.3 ? used / usedDays : gas.sizeKg / gas.typicalDays;
+    const sinceWeigh = (now - w.t) / DAY;
+    const kgNow = Math.max(0, kgLeft - perDay * sinceWeigh);
+    const pct = Math.max(0, Math.min(100, Math.round((kgNow / gas.sizeKg) * 100)));
+    const daysLeft = Math.max(0, Math.round(kgNow / perDay));
+    const level = pct <= 10 ? "critical" : pct <= 25 ? "low" : "ok";
+    return { last, days: Math.floor(days), pct, daysLeft, emptyAt: now + daysLeft * DAY, level, kgLeft: kgNow, weighed: w, perDay };
+  }
   const pct = Math.max(0, Math.min(100, Math.round((1 - days / gas.typicalDays) * 100)));
   const daysLeft = Math.max(0, Math.round(gas.typicalDays - days));
   const emptyAt = last + gas.typicalDays * DAY;
   const level = pct <= 10 ? "critical" : pct <= 25 ? "low" : "ok";
-  return { last, days: Math.floor(days), pct, daysLeft, emptyAt, level, kgLeft: (gas.sizeKg * pct) / 100 };
+  return { last, days: Math.floor(days), pct, daysLeft, emptyAt, level, kgLeft: (gas.sizeKg * pct) / 100, weighed: null, perDay: gas.sizeKg / gas.typicalDays };
 }
 
 /** The gas cylinder with the least left (for the summary tile). */
@@ -64,7 +83,6 @@ export const STATUS: Record<ServiceStatus, { label: string; short: string; long:
     chip: "border-dashed border-white/15 bg-black/25 text-[var(--ink-3)]",
   },
 };
-const NEXT_STATUS: Record<ServiceStatus, ServiceStatus> = { in_use: "on_request", on_request: "off", off: "in_use" };
 
 const latest = (entries: UtilityEntry[], unit: string, kind: UtilityKind) => entries.find((e) => e.unit === unit && e.kind === kind);
 
@@ -140,26 +158,28 @@ export function EnergyForm({
   });
   // checklist: which services this record covers, each with its own amount + cost
   // nothing pre-ticked: only services the user ticks ask for an amount
-  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false, telecom: false });
-  const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5", telecom: "" });
-  const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "", telecom: "" });
+  const [picked, setPicked] = useState<Record<UtilityKind, boolean>>({ electricity: false, water: false, gas: false, telecom: false, mobile: false });
+  const [amount, setAmount] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "12.5", telecom: "", mobile: "" });
+  const [cost, setCost] = useState<Record<UtilityKind, string>>({ electricity: "", water: "", gas: "", telecom: "", mobile: "" });
   // "Status in this unit" field: In use / On request / Not in use now ("" = leave as it is)
-  const [statusSel, setStatusSel] = useState<Record<UtilityKind, "" | ServiceStatus>>({ electricity: "", water: "", gas: "", telecom: "" });
+  const [statusSel, setStatusSel] = useState<Record<UtilityKind, "" | ServiceStatus>>({ electricity: "", water: "", gas: "", telecom: "", mobile: "" });
   // each service has its own account no. (electricity / water supply), filled from the unit's details
   const accountsFor = (unitId: string): Record<UtilityKind, string> => ({
     electricity: unitInfo[unitId]?.elecAccount ?? "",
     water: unitInfo[unitId]?.waterAccount ?? "",
     gas: "",
     telecom: unitInfo[unitId]?.telecomAccount ?? "",
+    mobile: "",
   });
   const [acct, setAcct] = useState<Record<UtilityKind, string>>(() => accountsFor(firstUnit?.id ?? ""));
   // bill month (YYYY-MM) - follows the "To" date unless changed by hand
   const [billM, setBillM] = useState<string>("");
   const monthOf = billM || f.to.slice(0, 7);
   // telecom bill: separate charges and connection (D1 / D2 / D3)
-  const [tc, setTc] = useState({ data: "", calls: "", tax: "", other: "", connection: "" });
+  const blankTc: Tc = { data: "", calls: "", tax: "", other: "", connection: "" };
+  const [tcs, setTcs] = useState<Record<"telecom" | "mobile", Tc>>({ telecom: blankTc, mobile: blankTc });
   const [photo, setPhoto] = useState<File | null>(null); // optional bill photo
-  const tcSum = ["data", "calls", "tax", "other"].reduce((a, k) => a + (Number(tc[k as keyof typeof tc]) || 0), 0);
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -179,13 +199,13 @@ export function EnergyForm({
           e.preventDefault();
           const statusChanges = KINDS.filter((k) => statusSel[k] !== "");
           if (!chosen.length && !statusChanges.length) {
-            setErr("Tick a service to add its bill, or choose a status (In use / On request / Not in use now)");
+            setErr("Switch on a service to add its bill, or choose a status (In use / On request / Not in use now)");
             return;
           }
           // telecom bills often don't show GB used, so a blank amount is fine there (saved as 0)
-          const missing = chosen.filter((k) => k !== "telecom" && amount[k].trim() === "");
+          const missing = chosen.filter((k) => k !== "telecom" && k !== "mobile" && amount[k].trim() === "");
           if (missing.length) {
-            setErr(`Enter “Used” for ${missing.map((k) => KIND[k].label).join(" and ")}, or untick it`);
+            setErr(`Enter “Used” for ${missing.map((k) => KIND[k].label).join(" and ")}, or switch it off`);
             return;
           }
           setBusy(true);
@@ -202,16 +222,17 @@ export function EnergyForm({
             }
             // one record per ticked service
             for (const k of chosen) {
-              const isTel = k === "telecom";
+              const tc = k === "telecom" || k === "mobile" ? tcs[k] : null;
+              const tcSum = tc ? tcSumOf(tc) : 0;
               await post("/api/utilities", {
                 ...f,
                 kind: k,
                 month: monthOf,
                 account: acct[k],
                 amount: Number(amount[k]),
-                cost: cost[k] === "" ? (isTel && tcSum ? tcSum : null) : Number(cost[k]),
+                cost: cost[k] === "" ? (tcSum ? tcSum : null) : Number(cost[k]),
                 image: image ?? undefined,
-                ...(isTel ? { connection: tc.connection, charges: { data: tc.data, calls: tc.calls, tax: tc.tax, other: tc.other } } : {}),
+                ...(tc ? { connection: tc.connection, charges: { data: tc.data, calls: tc.calls, tax: tc.tax, other: tc.other } } : {}),
               });
             }
             // status chosen for this unit (saved after the records, so it wins)
@@ -250,7 +271,7 @@ export function EnergyForm({
           </div>
         </div>
 
-        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Services · tick one or more</div>
+        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">Services · switch on one or more</div>
         <div className="mb-2 grid grid-cols-3 gap-2">
           {KINDS.map((k) => (
             <ServiceCheck
@@ -266,42 +287,58 @@ export function EnergyForm({
             />
           ))}
         </div>
-        <div className="mb-3 rounded-xl border border-dashed border-white/10 bg-black/20 px-3 py-2">
-          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]">
-            Status in this unit <span className="normal-case tracking-normal">(optional · now: {KINDS.map((k) => `${KIND[k].icon} ${STATUS[services[f.unit]?.[k] ?? "off"].short}`).join("  ")})</span>
-          </div>
-          <div className="space-y-1.5">
-            {KINDS.map((k) => (
-              <div key={k} className="flex items-center gap-2">
-                <span className="w-24 shrink-0 text-sm text-[var(--ink-2)]">
-                  {KIND[k].icon} {KIND[k].label}
+        <div className="status-panel mb-4 rounded-2xl p-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-white">🏷 Status in this unit</div>
+              <div className="text-[11px] text-[var(--ink-3)]">Optional · tap to change · tap again to clear</div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-[10px]">
+              {(["in_use", "on_request", "off"] as const).map((s) => (
+                <span key={s} className={`status-key status-key-${s}`}>
+                  {s === "off" ? "Not in use" : STATUS[s].label}
                 </span>
-                <div className="grid flex-1 grid-cols-3 gap-1">
+              ))}
+            </div>
+          </div>
+          <div className="space-y-3">
+            {KINDS.map((k) => {
+              const now = services[f.unit]?.[k] ?? "off";
+              const next = statusSel[k];
+              return (
+              <div key={k} className={`status-row status-row-${next || now} grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3 rounded-xl px-3.5 py-3`}>
+                <span className={`status-badge status-badge-${k}`} aria-hidden>
+                  {KIND[k].icon}
+                </span>
+                <span className="leading-tight">
+                  <span className="block text-sm font-semibold text-white">{KIND[k].label}</span>
+                  <span className="mt-0.5 block text-[11px] text-[var(--ink-3)]">
+                    now: {STATUS_ICON[now]} {STATUS[now].short}
+                    {next && next !== now ? <b className="text-white"> → {STATUS_ICON[next]} {STATUS[next].short}</b> : null}
+                  </span>
+                </span>
+                <div className="seg seg-lg col-span-2" role="group" aria-label={`${KIND[k].label} status`}>
                   {(["in_use", "on_request", "off"] as const).map((s) => (
-                    <label
+                    <button
                       key={s}
-                      className={`flex cursor-pointer items-center justify-center gap-1 rounded-lg border px-1.5 py-1 text-center text-[11px] font-semibold ${
-                        statusSel[k] === s ? STATUS[s].active : "border-white/10 text-[var(--ink-3)] hover:text-white"
-                      }`}
+                      type="button"
+                      aria-pressed={statusSel[k] === s}
+                      disabled={busy}
+                      onClick={() => {
+                        const v = statusSel[k] === s ? "" : s; // tap again to clear
+                        setStatusSel((p) => ({ ...p, [k]: v }));
+                        // not in use → no bill for it, so no "Used" amount is asked
+                        if (v === "off") setPicked((p) => ({ ...p, [k]: false }));
+                      }}
+                      className={`seg-btn seg-${s}`}
                     >
-                      <input
-                        type="checkbox"
-                        className="sr-only"
-                        checked={statusSel[k] === s}
-                        disabled={busy}
-                        onChange={(e) => {
-                          const v = e.target.checked ? s : "";
-                          setStatusSel((p) => ({ ...p, [k]: v }));
-                          // not in use → no bill for it, so no "Used" amount is asked
-                          if (v === "off") setPicked((p) => ({ ...p, [k]: false }));
-                        }}
-                      />
-                      {statusSel[k] === s ? "☑" : "☐"} {STATUS[s].label}
-                    </label>
+                      {s === "off" ? "Not in use" : STATUS[s].label}
+                    </button>
                   ))}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -345,7 +382,7 @@ export function EnergyForm({
           </div>
           {chosen.length === 0 && (
             <p className="col-span-2 rounded-xl border border-dashed border-white/10 px-3 py-2 text-xs text-[var(--ink-3)]">
-              Tick ⚡ Electricity, 💧 Water or 🔥 Gas above to enter a bill. To only mark a service as not used, tick it under “Not in use now” and save.
+              Switch on ⚡ Electricity, 💧 Water, 🔥 Gas, 📶 Home WiFi / phone or 📱 Mobile above to enter a bill. To only mark a service as not used, choose “Not in use” and save.
             </p>
           )}
           {chosen.map((k) => (
@@ -385,61 +422,123 @@ export function EnergyForm({
                   placeholder="optional"
                 />
               </div>
-              {k === "telecom" && (
-                <div className="col-span-2 grid grid-cols-5 gap-2">
-                  {(
-                    [
-                      ["connection", "Connection", "D1"],
-                      ["data", "📱 Data", ""],
-                      ["calls", "📞 Calls", ""],
-                      ["tax", "🧾 Tax", ""],
-                      ["other", "Other", ""],
-                    ] as const
-                  ).map(([key, l, ph]) => (
-                    <div key={key}>
-                      <label className={label} htmlFor={`ef-tc-${key}`}>
-                        {l}
-                      </label>
-                      <input
-                        id={`ef-tc-${key}`}
-                        className={input}
-                        type={key === "connection" ? "text" : "number"}
-                        step="any"
-                        min="0"
-                        inputMode={key === "connection" ? "text" : "decimal"}
-                        value={tc[key]}
-                        placeholder={ph || "LKR"}
-                        list={key === "connection" ? "ef-tc-connections" : undefined}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setTc((p) => ({ ...p, [key]: v }));
-                          // picking a mobile number fills in its usual monthly package cost
-                          if (key === "connection") {
-                            const mb = (unitInfo[f.unit]?.mobiles ?? []).find((m) => m.number === v);
-                            if (mb?.monthly != null && cost.telecom === "") setTc((p) => ({ ...p, data: p.data || String(mb.monthly) }));
-                          }
-                        }}
-                      />
-                    </div>
-                  ))}
-                  {/* suggestions: D1/D2/D3 connections and this unit's mobile numbers */}
-                  <datalist id="ef-tc-connections">
-                    {telecomMap.filter((t) => t.units.includes(f.unit)).map((t) => (
-                      <option key={t.code} value={t.code}>
-                        {t.units.length > 1 ? "shared" : "fixed line"}
-                      </option>
-                    ))}
-                    {(unitInfo[f.unit]?.mobiles ?? []).map((m) => (
-                      <option key={m.number} value={m.number}>
-                        {`${m.provider} ${m.package}`.trim()}
-                      </option>
-                    ))}
-                  </datalist>
-                  {tcSum > 0 && cost.telecom === "" && (
-                    <p className="col-span-5 -mt-1 text-[11px] text-violet-200">Cost = data + calls + tax + other = LKR {Math.round(tcSum).toLocaleString()}</p>
-                  )}
-                </div>
-              )}
+              {(k === "telecom" || k === "mobile") &&
+                (() => {
+                  const tc = tcs[k];
+                  const setTc = (fn: (p: Tc) => Tc) => setTcs((all) => ({ ...all, [k]: fn(all[k]) }));
+                  const sum = tcSumOf(tc);
+                  const mobiles = unitInfo[f.unit]?.mobiles ?? [];
+                  const lines = telecomMap.filter((t) => t.units.includes(f.unit));
+                  return (
+                    <>
+                      <div className="col-span-2">
+                        <div className={label}>{k === "mobile" ? "📱 Which mobile number? · personal calls & data" : "☎ Which line? · home WiFi / home phone"}</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {k === "mobile" &&
+                            mobiles.map((m) => (
+                              <button
+                                key={m.number}
+                                type="button"
+                                aria-pressed={tc.connection === m.number}
+                                onClick={() =>
+                                  setTc((p) => ({
+                                    ...p,
+                                    connection: p.connection === m.number ? "" : m.number,
+                                    data: p.data || (m.monthly != null ? String(m.monthly) : ""),
+                                  }))
+                                }
+                                className={`line-chip line-${(m.provider || "other").toLowerCase().split(/[^a-z]/)[0]}`}
+                              >
+                                <span className="text-base">📱</span>
+                                <span className="text-left leading-tight">
+                                  <span className="block font-semibold">{m.number}</span>
+                                  <span className="block text-[10px] opacity-80">
+                                    {m.provider}
+                                    {m.package ? ` · ${m.package}` : ""}
+                                  </span>
+                                </span>
+                              </button>
+                            ))}
+                          {k === "telecom" &&
+                            lines.map((t) => (
+                              <button
+                                key={t.code}
+                                type="button"
+                                aria-pressed={tc.connection === t.code}
+                                onClick={() => setTc((p) => ({ ...p, connection: p.connection === t.code ? "" : t.code }))}
+                                className="line-chip line-fixed"
+                              >
+                                <span className="text-base">☎</span>
+                                <span className="text-left leading-tight">
+                                  <span className="block font-semibold">{t.code}</span>
+                                  <span className="block text-[10px] opacity-80">{t.units.length > 1 ? "shared · WiFi / phone" : "WiFi / phone"}</span>
+                                </span>
+                              </button>
+                            ))}
+                          {k === "mobile" && !mobiles.length && (
+                            <span className="self-center text-[11px] text-[var(--ink-3)]">No mobile numbers for this unit yet: add them with ✎ Edit on the unit, or type one below.</span>
+                          )}
+                          {k === "telecom" && !lines.length && (
+                            <span className="self-center text-[11px] text-[var(--ink-3)]">No home line for this unit: set it in “📶 Telecom bill connections”, or type one below.</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="col-span-2 grid grid-cols-5 gap-2">
+                        {(
+                          [
+                            ["connection", k === "mobile" ? "Number" : "Line", k === "mobile" ? "07…" : "D1"],
+                            ["data", k === "mobile" ? "📲 Data" : "🌐 WiFi", ""],
+                            ["calls", "📞 Calls", ""],
+                            ["tax", "🧾 Tax", ""],
+                            ["other", "Other", ""],
+                          ] as const
+                        ).map(([key, l, ph]) => (
+                          <div key={key}>
+                            <label className={label} htmlFor={`ef-${k}-${key}`}>
+                              {l}
+                            </label>
+                            <input
+                              id={`ef-${k}-${key}`}
+                              className={input}
+                              type={key === "connection" ? "text" : "number"}
+                              step="any"
+                              min="0"
+                              inputMode={key === "connection" ? "text" : "decimal"}
+                              value={tc[key]}
+                              placeholder={ph || "LKR"}
+                              list={key === "connection" ? `ef-${k}-lines` : undefined}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setTc((p) => ({ ...p, [key]: v }));
+                                // typing a known mobile number fills in its usual monthly package cost
+                                if (key === "connection" && k === "mobile") {
+                                  const mb = mobiles.find((m) => m.number === v);
+                                  if (mb?.monthly != null) setTc((p) => ({ ...p, data: p.data || String(mb.monthly) }));
+                                }
+                              }}
+                            />
+                          </div>
+                        ))}
+                        <datalist id={`ef-${k}-lines`}>
+                          {k === "telecom"
+                            ? lines.map((t) => (
+                                <option key={t.code} value={t.code}>
+                                  {t.units.length > 1 ? "shared" : "home line"}
+                                </option>
+                              ))
+                            : mobiles.map((m) => (
+                                <option key={m.number} value={m.number}>
+                                  {`${m.provider} ${m.package}`.trim()}
+                                </option>
+                              ))}
+                        </datalist>
+                        {sum > 0 && cost[k] === "" && (
+                          <p className="col-span-5 -mt-1 text-[11px] text-violet-200">Cost = data + calls + tax + other = LKR {Math.round(sum).toLocaleString()}</p>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               <div className="col-span-2">
                 <label className={label} htmlFor={`ef-acct-${k}`}>
                   {k === "electricity"
@@ -447,7 +546,9 @@ export function EnergyForm({
                     : k === "water"
                       ? `Water supply account no. (${unitInfo[f.unit]?.waterProvider ?? "NWSDB"})`
                       : k === "telecom"
-                        ? `Telecom / data account no. (${unitInfo[f.unit]?.telecomProvider ?? "SLT-Mobitel"})`
+                        ? `Home WiFi / phone account no. (${unitInfo[f.unit]?.telecomProvider ?? "SLT-Mobitel"})`
+                        : k === "mobile"
+                          ? "Mobile account no. (optional)"
                         : `Gas receipt / ref. (${unitInfo[f.unit]?.gasSupplier ?? "Litro"})`}
                 </label>
                 <input
@@ -586,6 +687,7 @@ export function UtilitiesPanel({
     changes: [],
     typicalDays: gas[0]?.typicalDays ?? 90,
     learned: false,
+    weighIns: [],
   });
   const unitName = unitId ? units.find((u) => u.id === unitId)?.name : null;
 
@@ -614,7 +716,7 @@ export function UtilitiesPanel({
       {unitId && <ServiceSwitches unit={unitId} services={services} busy={busy} onSet={setStatus} />}
 
       {one ? (
-        <UnitEnergy g={one} utilities={utilities} services={services} now={now} busy={busy} onFitted={() => setFitting(one)} onUndo={() => undoGas(one.unit)} />
+        <UnitEnergy g={one} utilities={utilities} services={services} now={now} busy={busy} onFitted={() => setFitting(one)} onUndo={() => undoGas(one.unit)} onWeighed={onChanged} />
       ) : unitId ? (
         <NoGasUnit unitId={unitId} utilities={utilities} services={services} onStart={() => setFitting(startGas(unitId))} />
       ) : (
@@ -691,7 +793,7 @@ export function UtilitiesPanel({
   );
 }
 
-/** One checklist box: ticked = service in use, unticked = not in use (available on request). */
+/** One on/off switch: on = service in use, off = not in use (available on request). */
 function ServiceCheck({
   kind,
   on,
@@ -710,17 +812,10 @@ function ServiceCheck({
       className={`chip-3d flex cursor-pointer select-none items-center gap-2 rounded-xl border transition ${busy ? "opacity-50" : ""} ${
         on ? "border-emerald-400/40 bg-emerald-500/15" : "border-dashed border-white/15 bg-black/25"
       } ${compact ? "px-2 py-1" : "px-3 py-2"}`}
-      title={on ? `${KIND[kind].label}: in use (untick if not used)` : `${KIND[kind].label}: not in use, available on request (tick when used)`}
+      title={on ? `${KIND[kind].label}: in use (switch off if not used)` : `${KIND[kind].label}: not in use, available on request (switch on when used)`}
     >
       <input type="checkbox" className="peer sr-only" checked={on} disabled={busy} onChange={(e) => onChange(e.target.checked)} />
-      <span
-        aria-hidden
-        className={`grid shrink-0 place-items-center rounded-md border-2 font-bold peer-focus-visible:ring-2 peer-focus-visible:ring-sky-400 ${
-          compact ? "h-4 w-4 text-[10px]" : "h-5 w-5 text-xs"
-        } ${on ? "border-emerald-400 bg-emerald-500 text-white" : "border-white/30 bg-transparent text-transparent"}`}
-      >
-        ✓
-      </span>
+      <span aria-hidden className={`switch-track ${compact ? "switch-sm" : ""} peer-focus-visible:ring-2 peer-focus-visible:ring-sky-400`} data-on={on} />
       <span className="min-w-0">
         <span className={`block font-semibold text-[var(--ink-1)] ${compact ? "text-[11px]" : "text-sm"}`}>
           {KIND[kind].icon} {KIND[kind].label}
@@ -731,10 +826,12 @@ function ServiceCheck({
   );
 }
 
+const STATUS_ICON: Record<ServiceStatus, string> = { in_use: "●", on_request: "◐", off: "○" };
+
 /**
  * Services checklist for one unit: each service is ● In use, ◐ On request
  * (provided whenever a tenant needs it) or ○ Not in use now.
- * Full size: three tick-boxes per service. Compact: a chip that cycles on tap.
+ * A segmented picker per service (full size and compact).
  */
 function ServiceSwitches({
   unit,
@@ -749,22 +846,34 @@ function ServiceSwitches({
   onSet: (unit: string, kind: UtilityKind, status: ServiceStatus) => void;
   compact?: boolean;
 }) {
-  const icon: Record<ServiceStatus, string> = { in_use: "●", on_request: "◐", off: "○" };
+  const icon = STATUS_ICON;
   if (compact) {
     return (
-      <div className="grid grid-cols-3 gap-1.5">
+      <div className="space-y-1">
         {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
           return (
-            <button
-              key={k}
-              disabled={busy}
-              onClick={() => onSet(unit, k, NEXT_STATUS[st])}
-              title={`${KIND[k].label}: ${STATUS[st].long}. Tap to change.`}
-              className={`chip-3d truncate rounded-lg border px-2 py-1 text-left text-[11px] font-semibold disabled:opacity-50 ${STATUS[st].chip}`}
-            >
-              {KIND[k].icon} {icon[st]} {STATUS[st].label}
-            </button>
+            <div key={k} className="flex items-center gap-1.5" title={`${KIND[k].label}: ${STATUS[st].long}`}>
+              <span className="w-5 shrink-0 text-center text-sm" aria-label={KIND[k].label}>
+                {KIND[k].icon}
+              </span>
+              <div className="seg seg-sm min-w-0 flex-1" role="radiogroup" aria-label={`${KIND[k].label} status`}>
+                {(["in_use", "on_request", "off"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    role="radio"
+                    aria-checked={st === s}
+                    aria-pressed={st === s}
+                    disabled={busy}
+                    onClick={() => st !== s && onSet(unit, k, s)}
+                    className={`seg-btn seg-${s}`}
+                  >
+                    {s === "off" ? "Not in use" : STATUS[s].label}
+                  </button>
+                ))}
+              </div>
+            </div>
           );
         })}
       </div>
@@ -772,7 +881,7 @@ function ServiceSwitches({
   }
   return (
     <div className="mb-3">
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services checklist · tick the status for each</div>
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-3)]">Services · choose the status for each</div>
       <div className="space-y-1.5">
         {(["electricity", "water", "gas", "telecom"] as const).map((k) => {
           const st = services[unit]?.[k] ?? "off";
@@ -781,17 +890,20 @@ function ServiceSwitches({
               <span className="w-28 shrink-0 text-sm font-semibold text-[var(--ink-1)]">
                 {KIND[k].icon} {KIND[k].label}
               </span>
-              <div className="grid min-w-0 flex-1 grid-cols-3 gap-1.5">
+              <div className="seg min-w-0 flex-1" role="radiogroup" aria-label={`${KIND[k].label} status`}>
                 {(["in_use", "on_request", "off"] as const).map((s) => (
-                  <label
+                  <button
                     key={s}
-                    className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs font-semibold transition ${
-                      st === s ? STATUS[s].active : "border-white/10 text-[var(--ink-3)] hover:text-white"
-                    } ${busy ? "opacity-50" : ""}`}
+                    type="button"
+                    role="radio"
+                    aria-checked={st === s}
+                    aria-pressed={st === s}
+                    disabled={busy}
+                    onClick={() => st !== s && onSet(unit, k, s)}
+                    className={`seg-btn seg-${s}`}
                   >
-                    <input type="checkbox" className="h-4 w-4 accent-emerald-500" checked={st === s} disabled={busy || st === s} onChange={() => onSet(unit, k, s)} />
-                    {STATUS[s].label}
-                  </label>
+                    {s === "off" ? "Not in use" : STATUS[s].label}
+                  </button>
                 ))}
               </div>
             </div>
@@ -800,6 +912,103 @@ function ServiceSwitches({
       </div>
       <p className="mt-1.5 text-[11px] text-[var(--ink-3)]">On request = provided whenever a tenant needs it. Any service can be added to any unit at any time.</p>
     </div>
+  );
+}
+
+/**
+ * ⚖ Weigh the cylinder: put it on a scale, enter the weight shown and the empty
+ * weight stamped on the cylinder ("TW", e.g. 15.0 kg). Gas left = scale − TW.
+ */
+function WeighButton({ g, onSaved }: { g: GasState; onSaved: () => void }) {
+  const TARE_KEY = "rt:gas-tare";
+  const [open, setOpen] = useState(false);
+  const [weight, setWeight] = useState("");
+  const [tare, setTare] = useState(() => {
+    try {
+      return localStorage.getItem(TARE_KEY) ?? g.weighIns?.at(-1)?.tare?.toString() ?? "15.0";
+    } catch {
+      return "15.0";
+    }
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const left = Number(weight) - Number(tare);
+  const valid = Number(weight) > 0 && Number(tare) > 0;
+  const input = "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2.5 text-lg font-semibold tabular-nums text-white outline-none ring-orange-400/50 focus:ring-2";
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-full border border-orange-300/40 bg-orange-500/15 px-4 py-1.5 text-sm font-semibold text-orange-100 hover:bg-orange-500/25"
+        title="Weigh the cylinder on a scale for the exact gas left"
+      >
+        ⚖ Weigh cylinder
+      </button>
+      {open &&
+        createPortal(
+          <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
+            <form
+              onClick={(e) => e.stopPropagation()}
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setBusy(true);
+                setErr(null);
+                try {
+                  try {
+                    localStorage.setItem(TARE_KEY, tare);
+                  } catch {}
+                  await post("/api/gas", { unit: g.unit, action: "weigh", weight: Number(weight), tare: Number(tare) });
+                  onSaved();
+                  setOpen(false);
+                } catch (x) {
+                  setErr(x instanceof Error ? x.message : "Could not save");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="card-3d w-full max-w-sm rounded-2xl p-5 hover:!translate-y-0"
+            >
+              <div className="-mx-5 -mt-5 mb-4 rounded-t-2xl bg-gradient-to-r from-orange-600/50 to-amber-500/30 px-5 py-4">
+                <h2 className="text-lg font-semibold text-white">⚖ Weigh gas cylinder · {g.unitName}</h2>
+                <p className="text-xs text-white/70">Put the cylinder on a bathroom or luggage scale</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]" htmlFor="gw-weight">
+                    Scale shows (kg)
+                  </label>
+                  <input id="gw-weight" className={input} type="number" step="0.1" min="0" inputMode="decimal" autoFocus value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="21.4" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]" htmlFor="gw-tare">
+                    Empty cylinder · TW (kg)
+                  </label>
+                  <input id="gw-tare" className={input} type="number" step="0.1" min="0" inputMode="decimal" value={tare} onChange={(e) => setTare(e.target.value)} />
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-[var(--ink-3)]">TW (tare weight) is stamped on the cylinder’s collar. A full {g.sizeKg} kg cylinder weighs about TW + {g.sizeKg} kg.</p>
+              {valid && (
+                <div className={`chip-3d mt-3 rounded-xl px-3 py-2 text-center ${left <= g.sizeKg * 0.15 ? "bg-red-500/15 text-red-100" : "bg-emerald-500/15 text-emerald-100"}`}>
+                  <div className="text-[10px] uppercase tracking-wider opacity-80">Gas left</div>
+                  <div className="text-2xl font-semibold tabular-nums">{Math.max(0, left).toFixed(1)} kg</div>
+                  <div className="text-xs opacity-80">{Math.round((Math.max(0, Math.min(left, g.sizeKg)) / g.sizeKg) * 100)}% of {g.sizeKg} kg</div>
+                </div>
+              )}
+              {err && <p className="mt-3 rounded-lg bg-red-500/15 px-3 py-2 text-sm text-red-200">{err}</p>}
+              <div className="mt-4 flex justify-end gap-2">
+                <button type="button" onClick={() => setOpen(false)} className="rounded-full border border-white/10 px-4 py-2 text-sm text-[var(--ink-2)] hover:text-white">
+                  Cancel
+                </button>
+                <button disabled={busy || !valid} className="rounded-full bg-gradient-to-r from-orange-500 to-amber-500 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                  {busy ? "Saving…" : "Save weight"}
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
@@ -1027,6 +1236,7 @@ function UnitEnergy({
   busy,
   onFitted,
   onUndo,
+  onWeighed,
 }: {
   g: GasState;
   utilities: UtilitiesState;
@@ -1035,29 +1245,51 @@ function UnitEnergy({
   busy: boolean;
   onFitted: () => void;
   onUndo: () => void;
+  onWeighed: () => void;
 }) {
   const s = gasSummary(g, now);
+  const isoDay = (t: number) => {
+    const d = new Date(t);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  // each cylinder: From (fitted) → To (replaced), days lasted, and its cost from the gas records
+  const gasRecords = utilities.entries.filter((e) => e.unit === g.unit && e.kind === "gas");
   const history = g.changes
-    .map((t, i) => ({ t, lasted: i < g.changes.length - 1 ? Math.round((g.changes[i + 1] - t) / DAY) : null }))
+    .map((t, i) => {
+      const next = i < g.changes.length - 1 ? g.changes[i + 1] : null;
+      const rec = gasRecords.find((e) => e.from === isoDay(t)) ?? (next ? gasRecords.find((e) => e.to === isoDay(next)) : undefined);
+      return { from: t, to: next, days: Math.round(((next ?? now) - t) / DAY), cost: rec?.cost ?? null };
+    })
     .reverse()
-    .slice(0, 3);
+    .slice(0, 5);
   return (
     <div className="space-y-3">
       <div className="chip-3d rounded-2xl border border-white/5 bg-black/25 p-3">
         <div className="mb-1 font-semibold text-[var(--ink-1)]">🔥 Gas cylinder · {g.sizeKg} kg LPG</div>
         <div className="flex flex-wrap items-center gap-3">
           <Ring pct={s.pct} level={s.level} />
-          <div className="min-w-0 flex-1 space-y-1 text-sm text-[var(--ink-2)]">
-            <div>
-              Fitted <b className="text-[var(--ink-1)]">{fmt(s.last)}</b> · {s.days} days ago
+          <div className="min-w-0 flex-1 space-y-2 text-sm text-[var(--ink-2)]">
+            {/* current cylinder: From → To */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="chip-3d chip-in rounded-lg px-2.5 py-1.5">
+                <div className="text-[9px] font-semibold uppercase tracking-wider text-sky-300">From · fitted</div>
+                <div className="font-semibold tabular-nums text-white">{fmt(s.last)}</div>
+                <div className="text-[10px] text-white/60">{s.days} days ago</div>
+              </div>
+              <div className="chip-3d chip-out rounded-lg px-2.5 py-1.5">
+                <div className="text-[9px] font-semibold uppercase tracking-wider text-amber-300">To · expected empty</div>
+                <div className="font-semibold tabular-nums text-white">{fmt(s.emptyAt)}</div>
+                <div className="text-[10px] text-white/60">{s.daysLeft} days left</div>
+              </div>
             </div>
             <div>
-              ≈ <b className="text-[var(--ink-1)]">{s.kgLeft.toFixed(1)} kg</b> · <b className="text-[var(--ink-1)]">{s.daysLeft} days</b> left
+              {s.weighed ? "⚖" : "≈"} <b className="text-[var(--ink-1)]">{s.kgLeft.toFixed(1)} kg</b> left
+              <span className="text-xs text-[var(--ink-3)]">
+                {s.weighed
+                  ? ` · weighed ${fmt(s.weighed.t)} (${s.weighed.gross} kg on scale − ${s.weighed.tare} kg empty) · using ${s.perDay.toFixed(2)} kg/day`
+                  : ` · estimate: ${g.learned ? `usually lasts ${g.typicalDays} days` : `assuming ${g.typicalDays} days per cylinder`}`}
+              </span>
             </div>
-            <div>
-              Empty around <b className="text-[var(--ink-1)]">{fmt(s.emptyAt)}</b>
-            </div>
-            <div className="text-xs text-[var(--ink-3)]">{g.learned ? `Usually lasts ${g.typicalDays} days` : `Assuming ${g.typicalDays} days per cylinder`}</div>
           </div>
         </div>
         {s.level !== "ok" && (
@@ -1073,21 +1305,36 @@ function UnitEnergy({
           >
             New cylinder fitted
           </button>
+          <WeighButton g={g} onSaved={onWeighed} />
           {g.source === "live" && (
             <button disabled={busy} onClick={onUndo} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-[var(--ink-2)] hover:text-white">
               Undo last
             </button>
           )}
         </div>
-        {history.length > 1 && (
-          <ul className="mt-2 space-y-0.5 border-t border-white/5 pt-2 text-xs text-[var(--ink-3)]">
-            {history.map((h) => (
-              <li key={h.t} className="flex justify-between tabular-nums">
-                <span>{fmt(h.t)}</span>
-                <span>{h.lasted != null ? `lasted ${h.lasted} days` : "current"}</span>
-              </li>
-            ))}
-          </ul>
+        {history.length > 0 && (
+          <div className="mt-3 overflow-hidden rounded-xl border border-white/5">
+            <table className="w-full text-xs tabular-nums">
+              <thead className="bg-black/30 text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
+                <tr>
+                  <th className="px-2.5 py-1.5 text-left">From</th>
+                  <th className="px-2.5 py-1.5 text-left">To</th>
+                  <th className="px-2.5 py-1.5 text-right">Days</th>
+                  <th className="px-2.5 py-1.5 text-right">Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((h) => (
+                  <tr key={h.from} className={`border-t border-white/5 ${h.to == null ? "bg-emerald-500/10" : ""}`}>
+                    <td className="px-2.5 py-1.5 text-[var(--ink-1)]">{fmt(h.from)}</td>
+                    <td className="px-2.5 py-1.5">{h.to != null ? <span className="text-[var(--ink-1)]">{fmt(h.to)}</span> : <span className="font-semibold text-emerald-300">● in use</span>}</td>
+                    <td className="px-2.5 py-1.5 text-right text-[var(--ink-2)]">{h.days}</td>
+                    <td className="px-2.5 py-1.5 text-right text-[var(--ink-2)]">{lkr(h.cost)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       <ElecWater unit={g.unit} utilities={utilities} services={services} />
@@ -1258,7 +1505,7 @@ export function EnergyRecords({
               const t = `Energy records · ${unit === "all" ? "All units" : name(unit)} · ${kind === "all" ? "All types" : KIND[kind].label}`;
               printRecords(rows, t, name, location);
             }}
-            className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10"
+            className="btn-print rounded-full px-4 py-2 text-sm font-semibold text-white"
           >
             🖨 Print
           </button>

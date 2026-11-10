@@ -127,7 +127,7 @@ function Skeleton() {
  * or a server mid-update) so a shape change can never crash the screen.
  */
 function normalize(j: DashboardData): DashboardData {
-  const gas = Array.isArray(j.gas) ? j.gas : [];
+  const gas = (Array.isArray(j.gas) ? j.gas : []).map((g) => ({ ...g, weighIns: Array.isArray(g?.weighIns) ? g.weighIns : [] }));
   return {
     ...j,
     units: Array.isArray(j.units) ? j.units.map((u) => ({ ...u, airbnbRooms: u.airbnbRooms ?? [], owner: u.owner ?? null, usage: u.usage ?? null })) : [],
@@ -357,7 +357,7 @@ export function Dashboard() {
           </button>
           <a
             href="/report"
-            className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white"
+            className="btn-print rounded-full px-4 py-2 text-sm text-white"
             title="Print or save every record as PDF"
           >
             🖨 <span className="hidden sm:inline">Print report</span>

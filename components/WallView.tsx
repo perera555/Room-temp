@@ -216,7 +216,7 @@ export function WallView({
           <button onClick={onDetailed} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Scrolling view with every detail, unit pages and energy records">
             Detailed view
           </button>
-          <a href="/report" className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--ink-2)] hover:text-white" title="Print or save every record as PDF">
+          <a href="/report" className="btn-print rounded-full px-4 py-2 text-sm text-white" title="Print or save every record as PDF">
             🖨 Report
           </a>
           <Link href="/guide" aria-label="User guide" className="grid h-9 w-9 place-items-center rounded-full border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--ink-2)] hover:text-white">

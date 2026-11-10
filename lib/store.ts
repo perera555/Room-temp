@@ -190,6 +190,36 @@ export async function markServiceUsed(unit: string, kind: string) {
   await setService(unit, kind, "in_use");
 }
 
+/* ---------------- Gas cylinder weigh-ins (scale readings) ---------------- */
+const gasWeightKey = (unit: string) => `rt:gas:weights:${unit}`;
+export type GasWeighIn = { t: number; gross: number; tare: number };
+
+export async function loadGasWeights(units: string[]): Promise<Record<string, GasWeighIn[]>> {
+  const res = await pipeline(units.map((u) => ["LRANGE", gasWeightKey(u), 0, -1]));
+  return Object.fromEntries(
+    units.map((u, i) => [
+      u,
+      ((res[i]?.result as string[]) ?? [])
+        .map((s) => {
+          try {
+            return JSON.parse(s) as GasWeighIn;
+          } catch {
+            return null;
+          }
+        })
+        .filter((w): w is GasWeighIn => !!w)
+        .sort((a, b) => a.t - b.t),
+    ]),
+  );
+}
+
+export async function addGasWeight(unit: string, w: GasWeighIn) {
+  await pipeline([
+    ["RPUSH", gasWeightKey(unit), JSON.stringify(w)],
+    ["LTRIM", gasWeightKey(unit), -30, -1],
+  ]);
+}
+
 /* ---------------- Gas cylinder changes ---------------- */
 const gasKey = (unit: string) => `rt:gas:changes:${unit}`;
 

@@ -70,9 +70,10 @@ export type GasState = {
   changes: number[]; // timestamps a new cylinder was fitted, oldest first
   typicalDays: number; // how long a cylinder usually lasts
   learned: boolean; // typicalDays came from real history
+  weighIns: { t: number; gross: number; tare: number }[]; // scale readings (latest last)
 };
 
-export type UtilityKind = "electricity" | "water" | "gas" | "telecom"; // telecom = internet / phone / data bill
+export type UtilityKind = "electricity" | "water" | "gas" | "telecom" | "mobile"; // telecom = fixed line / internet / data bill (D1, D2…), mobile = mobile phone bill
 
 /** One utility reading / bill: usage between two dates. */
 export type UtilityEntry = {

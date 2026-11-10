@@ -215,6 +215,13 @@ Content-Type: application/json
         <ul>
           <li>It starts by assuming one cylinder lasts <b>about 3 months (90 days)</b>. After two or more changes it learns how long yours really last.</li>
           <li>Pressed it by mistake? Use <b>Undo last</b>.</li>
+          <li>
+            <b>⚖ Weigh cylinder (exact gas left):</b> put the cylinder on a bathroom or luggage scale and press <b>⚖ Weigh cylinder</b>.
+            Enter the weight shown and the empty weight <b>TW</b> stamped on the cylinder collar (often about 15 kg). Gas left = scale − TW,
+            e.g. 21.4 − 15.0 = <b>6.4 kg</b>. The app then uses this real figure (and how fast you used gas) for the days left and empty
+            date. Weigh again any time; the TW is remembered.
+          </li>
+          <li>The gas card shows <b>From</b> (fitted date) → <b>To</b> (expected empty) and a history of every cylinder with its days and cost.</li>
           <li>The button needs the free Upstash database (step 4). Without it, set <code>GAS_LAST_CHANGED</code> (e.g. <code>2026-11-02</code>) in Vercel instead.</li>
         </ul>
         <p>
@@ -232,7 +239,12 @@ Content-Type: application/json
           by phone number.
         </p>
         <p>
-          <b>📶 Telecom / data bills</b> work exactly like electricity and water: From → To, data used (GB), cost in LKR.
+          <b>📶 Home WiFi / phone</b> (fixed lines: Unit 1 line 12345, D1, D2, D3) and <b>📱 Mobile</b> (personal mobile numbers:
+          calls and data) are two separate services. Both work like electricity and water: From → To, data used (GB), and the cost
+          split into data / WiFi, calls, tax and other. Tap the line or mobile number in <b>+ Add record</b>.
+          <b> Usage from your account:</b> the providers have no public link for apps, so open the <b>MySLT</b>, <b>MyDialog</b>,
+          Mobitel Selfcare, Hutch or Airtel app, take a <b>screenshot of the usage page</b>, and import it with <b>📷 Import bill</b>. The
+          GB used, dates and number are read automatically.
           <b> Monthly costs:</b> the Energy panel shows <b>this month’s and last month’s total</b>, and the “Monthly costs (LKR)” table
           shows every month per unit (⚡ 💧 🔥 📶 and total). A bill counts in the month of its “To” date. Both are also in the
           printed report.
@@ -240,7 +252,8 @@ Content-Type: application/json
         <p>
           <b>📷 Import a paid bill (reads the photo for you):</b> press <b>📷 Import bill</b>, take a photo of the bill (or choose a
           PDF). The app reads the provider, account, period, bill month and every charge (data, calls, tax…), then shows it for you to
-          check. Press <b>Save</b> and the records are added to Energy, with the bill photo attached (📎 in the records list).
+          check. <b>It scans automatically</b> as soon as you take or choose the photo; on a computer you can also <b>drag the photo
+          into the window</b> or <b>paste it with Ctrl+V</b>. Press <b>Save</b> and the records are added to Energy, with the bill photo attached (📎 in the records list).
           Telecom lines are sent to units by connection: <b>D1 → Unit 2, D2 → Unit 3, D3 → Unit 3 + Unit 4</b> (shared, split
           equally). Change this in “📶 Telecom bill connections”. Other bills are matched by account number.
         </p>
@@ -251,10 +264,11 @@ Content-Type: application/json
           print or download (Excel) any range.
         </p>
         <p>
-          <b>Services checklist:</b> each unit has checkboxes ☑ Electricity ☑ Water ☐ Gas. Ticked = in use. Unticked = “Not in use now ·
-          available on request”. By default only <b>Unit 1</b> uses gas. When another unit starts using gas, press <b>🔥 Start gas</b>
-          (or tick Gas) and record its first cylinder. In <b>+ Add record</b> you can tick several services at once (each with its
-          own amount and cost), or tick <b>Not in use now</b> to mark a service as unused. Adding a record turns that service on.
+          <b>Services status:</b> for each unit every service (⚡ 💧 🔥 📶) has a coloured selector: tap <b>● In use</b> (green),
+          <b> ◐ On request</b> (orange: provided whenever a tenant asks) or <b>○ Not in use</b> (grey). By default only <b>Unit 1</b>
+          uses gas. When another unit starts using gas, press <b>🔥 Start gas</b> and record its first cylinder. In <b>+ Add record</b>
+          switch on several services at once (each with its own amount and cost), or choose <b>Not in use</b> to mark a service as
+          unused. Adding a record turns that service on.
         </p>
         <p>
           <b>Print / PDF:</b> the <b>🖨 Print report</b> button (top of the dashboard) opens a full report of everything: units and
@@ -275,7 +289,7 @@ Content-Type: application/json
           come from real sensors, never from sample data. Change the limits with <code>ALERT_HOT</code> and <code>ALERT_COLD</code>.
         </p>
         <p>
-          <b>Voice on the wall screen:</b> tap <b>🔇</b> in the top bar (or tick “Voice &amp; beep” in the Alerts panel) so it shows
+          <b>Voice on the wall screen:</b> tap <b>🔇</b> in the top bar (or switch on “Voice &amp; beep” in the Alerts panel) so it shows
           <b> 🔊</b>. Browsers only allow sound after one tap, so tap it once after the screen starts. On a Raspberry Pi kiosk you can
           start Chromium with <code>--autoplay-policy=no-user-gesture-required</code>. The warning repeats every 15 minutes while the
           room is still out of range.

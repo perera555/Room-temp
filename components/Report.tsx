@@ -61,7 +61,7 @@ export function Report() {
       `}</style>
 
       <div className="no-print mb-6 flex flex-wrap items-center gap-2">
-        <button onClick={() => window.print()} className="rounded-lg bg-slate-900 px-4 py-2 font-semibold text-white">
+        <button onClick={() => window.print()} className="rounded-xl bg-gradient-to-b from-sky-600 to-blue-800 px-5 py-2.5 text-base font-semibold text-white shadow-lg hover:brightness-110">
           🖨 Print
         </button>
         <button

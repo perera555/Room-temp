@@ -39,7 +39,8 @@ type Row = ScannedLine & { units: string[] };
 const KINDS: { k: UtilityKind; label: string }[] = [
   { k: "electricity", label: "⚡ Electricity" },
   { k: "water", label: "💧 Water" },
-  { k: "telecom", label: "📶 Telecom / data" },
+  { k: "telecom", label: "📶 Home WiFi / phone" },
+  { k: "mobile", label: "📱 Mobile" },
   { k: "gas", label: "🔥 Gas" },
 ];
 const clean = (s: string) => s.replace(/[^0-9a-z]/gi, "").toLowerCase();
@@ -74,7 +75,7 @@ export function BillScanButton({
         type="button"
         onClick={() => setOpen(true)}
         title={enabled ? "Photograph or upload a bill and it is filled in for you" : "Needs ANTHROPIC_API_KEY in Vercel (see guide)"}
-        className="rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 px-3 py-1.5 text-xs font-semibold text-white shadow hover:brightness-110"
+        className="btn-scan rounded-full px-4 py-2 text-sm font-semibold text-white"
       >
         {label}
       </button>
@@ -107,6 +108,7 @@ function BillScanDialog({
   const [head, setHead] = useState({ kind: "electricity" as UtilityKind, provider: "", account: "", customer: "", from: "", to: "", month: "", notes: "" });
   const [rows, setRows] = useState<Row[]>([]);
   const [file, setFile] = useState<File | null>(null); // the bill photo, saved with the records
+  const [drag, setDrag] = useState(false);
 
   /** Which unit(s) a bill line belongs to: telecom connection map, then account number, then the current unit. */
   function unitsFor(line: ScannedLine, bill: ScannedBill): string[] {
@@ -175,7 +177,7 @@ function BillScanDialog({
     const iso = (x: Date) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
     const from = iso(new Date(d.getFullYear(), d.getMonth() - 1, 1));
     const to = iso(new Date(d.getFullYear(), d.getMonth(), 0));
-    const providers: Record<UtilityKind, string> = { electricity: "CEB", water: "NWSDB", telecom: "SLT-Mobitel", gas: "Litro" };
+    const providers: Record<UtilityKind, string> = { electricity: "CEB", water: "NWSDB", telecom: "SLT-Mobitel", mobile: "Dialog", gas: "Litro" };
     setHead({ kind, provider: providers[kind], account: "", customer: "", from, to, month: to.slice(0, 7), notes: "" });
     const blank = (connection: string, units: string[]): Row => ({
       connection,
@@ -189,7 +191,16 @@ function BillScanDialog({
       total: 0,
       units,
     });
-    setRows(kind === "telecom" && telecomMap.length ? telecomMap.map((t) => blank(t.code, t.units)) : [blank("", defaultUnit ? [defaultUnit] : [])]);
+    const mobileRows = Object.entries(unitInfo)
+      .filter(([u]) => !defaultUnit || u === defaultUnit)
+      .flatMap(([u, i]) => (i.mobiles ?? []).map((m) => blank(m.number, [u])));
+    setRows(
+      kind === "telecom" && telecomMap.length
+        ? telecomMap.map((t) => blank(t.code, t.units))
+        : kind === "mobile" && mobileRows.length
+          ? mobileRows
+          : [blank("", defaultUnit ? [defaultUnit] : [])],
+    );
     setStage("review");
   }
 
@@ -250,7 +261,28 @@ function BillScanDialog({
 
   return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-3 backdrop-blur-sm" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()} className="card-3d max-h-[94vh] w-full max-w-3xl overflow-y-auto rounded-2xl p-5 hover:!translate-y-0">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        onPaste={(e) => {
+          // Ctrl+V a screenshot / copied photo of a bill → scanned automatically
+          const f = Array.from(e.clipboardData.files).find((x) => x.type.startsWith("image/") || x.type === "application/pdf");
+          if (f && stage === "pick" && enabled) read(f);
+        }}
+        onDragOver={(e) => {
+          if (stage === "pick") {
+            e.preventDefault();
+            setDrag(true);
+          }
+        }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDrag(false);
+          const f = e.dataTransfer.files?.[0];
+          if (f && stage === "pick" && enabled) read(f);
+        }}
+        className={`card-3d max-h-[94vh] ${drag ? "ring-4 ring-fuchsia-400/70" : ""} w-full max-w-3xl overflow-y-auto rounded-2xl p-5 hover:!translate-y-0`}
+      >
         <div className="-mx-5 -mt-5 mb-4 flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-violet-600/50 via-fuchsia-600/30 to-sky-600/40 px-5 py-4">
           <div>
             <h2 className="text-lg font-semibold text-white">📷 Import a bill</h2>
@@ -266,11 +298,11 @@ function BillScanDialog({
         {stage === "pick" && (
           <div className="space-y-3">
             <p className="text-sm text-[var(--ink-2)]">
-              Take a photo of the paid bill (electricity, water, telecom / data or gas) or choose a PDF. The app reads it and fills in the
+              Take a photo of the paid bill (electricity, water, gas, home WiFi / phone or mobile) or choose a PDF. The app reads it and fills in the
               records for you to check.
             </p>
             <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-[var(--ink-2)]">
-              Telecom connections:{" "}
+              Home WiFi / phone lines:{" "}
               {telecomMap.map((t) => (
                 <span key={t.code} className="mr-3">
                   <b className="text-white">{t.code}</b> → {t.units.map((u) => units.find((x) => x.id === u)?.name ?? u).join(" + ")}
@@ -313,6 +345,11 @@ function BillScanDialog({
                 />
               </label>
             </div>
+            {enabled && (
+              <p className="text-center text-xs text-[var(--ink-3)]">
+                Tip: you can also <b className="text-white">drag a bill photo here</b> or <b className="text-white">paste it (Ctrl+V)</b> – it is read automatically.
+              </p>
+            )}
             <div className="rounded-2xl border border-white/10 bg-black/20 p-3">
               <div className="mb-2 text-sm font-semibold text-white">✍ Or enter the bill by hand</div>
               <div className="flex flex-wrap gap-2">
@@ -323,12 +360,16 @@ function BillScanDialog({
                 ))}
               </div>
               <label className="mt-2 block text-[11px] text-[var(--ink-3)]">
-                📎 Attach the bill photo to keep it (optional):
+                📎 Attach the bill photo (optional{enabled ? " – it is scanned and filled in automatically" : ""}):
                 <input
                   type="file"
                   accept="image/jpeg,image/png,image/webp,application/pdf"
                   className="mt-1 block w-full text-xs file:mr-3 file:rounded-full file:border-0 file:bg-white/10 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-white"
-                  onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    if (f && enabled) read(f); // scan it automatically when bill reading is set up
+                    else setFile(f);
+                  }}
                 />
               </label>
             </div>
@@ -337,9 +378,19 @@ function BillScanDialog({
 
         {stage === "reading" && (
           <div className="flex flex-col items-center gap-3 py-10 text-center">
-            {preview && <img src={preview} alt="Bill" className="max-h-56 rounded-lg opacity-70" />}
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-violet-400 border-t-transparent" />
-            <p className="text-sm text-[var(--ink-2)]">Reading the bill… this takes 10–40 seconds.</p>
+            {preview ? (
+              <div className="scan-frame relative overflow-hidden rounded-xl ring-2 ring-fuchsia-400/60">
+                <img src={preview} alt="Bill" className="max-h-64 opacity-80" />
+                <div className="scan-line" />
+              </div>
+            ) : (
+              <div className="scan-frame relative grid h-40 w-32 place-items-center overflow-hidden rounded-xl bg-white/10 text-5xl ring-2 ring-fuchsia-400/60">
+                📄
+                <div className="scan-line" />
+              </div>
+            )}
+            <p className="text-sm font-semibold text-white">🔍 Scanning the bill automatically…</p>
+            <p className="text-xs text-[var(--ink-3)]">Reading provider, account, dates, usage, data / calls / tax and total · 10–40 seconds</p>
           </div>
         )}
 

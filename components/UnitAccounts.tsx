@@ -267,11 +267,11 @@ export function UnitsAccountsPanel({ units, unitInfo, onSaved }: { units: UnitDa
 /* ------------------------------------------------------------------ */
 /* Monthly costs                                                       */
 /* ------------------------------------------------------------------ */
-const KINDS: UtilityKind[] = ["electricity", "water", "gas", "telecom"];
-const ICON: Record<UtilityKind, string> = { electricity: "⚡", water: "💧", gas: "🔥", telecom: "📶" };
+const KINDS: UtilityKind[] = ["electricity", "water", "gas", "telecom", "mobile"];
+const ICON: Record<UtilityKind, string> = { electricity: "⚡", water: "💧", gas: "🔥", telecom: "📶", mobile: "📱" };
 
 const unitLabel = (units: UnitData[], unit: string) => (unit === "all" ? "All units" : units.find((u) => u.id === unit)?.name ?? unit);
-const LABEL: Record<UtilityKind, string> = { electricity: "Electricity", water: "Water", gas: "Gas", telecom: "Telecom / data" };
+const LABEL: Record<UtilityKind, string> = { electricity: "Electricity", water: "Water", gas: "Gas", telecom: "Home WiFi / phone", mobile: "Mobile" };
 
 /** Download every record in the chosen months (one row per bill, with the breakdown) as a CSV that opens in Excel. */
 function downloadMonthsCsv(utilities: UtilitiesState, units: UnitData[], unit: string, months: string[]) {
@@ -325,9 +325,9 @@ function printMonths(units: UnitData[], unit: string, rows: ReturnType<typeof mo
   tfoot td{font-weight:700;background:#f6f6f6}button{margin-bottom:12px;padding:8px 14px}@media print{button{display:none}}</style></head><body>
   <button onclick="window.print()">🖨 Print / Save as PDF</button>
   <h1>Monthly costs – ${unitLabel(units, unit)}</h1><p>${rows.length} months · printed ${new Date().toLocaleString()}</p>
-  <table><thead><tr><th>Month</th><th class="n">Electricity</th><th class="n">Water</th><th class="n">Gas</th><th class="n">Telecom / data</th><th class="n">Total</th></tr></thead><tbody>
-  ${rows.map((r) => `<tr><td>${monthName(r.month)}</td><td class="n">${money(r.electricity)}</td><td class="n">${money(r.water)}</td><td class="n">${money(r.gas)}</td><td class="n">${money(r.telecom)}</td><td class="n"><b>${money(r.total)}</b></td></tr>`).join("")}
-  </tbody><tfoot><tr><td>Total</td><td class="n">${money(tot("electricity"))}</td><td class="n">${money(tot("water"))}</td><td class="n">${money(tot("gas"))}</td><td class="n">${money(tot("telecom"))}</td><td class="n">${money(tot("total"))}</td></tr></tfoot></table>
+  <table><thead><tr><th>Month</th><th class="n">Electricity</th><th class="n">Water</th><th class="n">Gas</th><th class="n">Home WiFi / phone</th><th class="n">Mobile</th><th class="n">Total</th></tr></thead><tbody>
+  ${rows.map((r) => `<tr><td>${monthName(r.month)}</td><td class="n">${money(r.electricity)}</td><td class="n">${money(r.water)}</td><td class="n">${money(r.gas)}</td><td class="n">${money(r.telecom)}</td><td class="n">${money(r.mobile)}</td><td class="n"><b>${money(r.total)}</b></td></tr>`).join("")}
+  </tbody><tfoot><tr><td>Total</td><td class="n">${money(tot("electricity"))}</td><td class="n">${money(tot("water"))}</td><td class="n">${money(tot("gas"))}</td><td class="n">${money(tot("telecom"))}</td><td class="n">${money(tot("mobile"))}</td><td class="n">${money(tot("total"))}</td></tr></tfoot></table>
   <script>setTimeout(function(){window.print()},300)</script></body></html>`);
   w.document.close();
 }
@@ -342,11 +342,11 @@ export function monthlyCosts(utilities: UtilitiesState, unit: string | "all") {
     if (unit !== "all" && e.unit !== unit) continue;
     if (e.cost == null) continue;
     const m = billMonth(e); // YYYY-MM
-    const row = map.get(m) ?? { electricity: 0, water: 0, gas: 0, telecom: 0 };
-    row[e.kind] += e.cost;
+    const row = map.get(m) ?? { electricity: 0, water: 0, gas: 0, telecom: 0, mobile: 0 };
+    row[e.kind] = (row[e.kind] ?? 0) + e.cost;
     map.set(m, row);
   }
-  return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([month, v]) => ({ month, ...v, total: v.electricity + v.water + v.gas + v.telecom }));
+  return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([month, v]) => ({ month, ...v, total: v.electricity + v.water + v.gas + v.telecom + v.mobile }));
 }
 
 export const monthName = (ym: string) => new Date(ym + "-15T12:00:00").toLocaleDateString([], { month: "long", year: "numeric" });
@@ -361,11 +361,12 @@ export function MonthlyCosts({ utilities, units, unitId }: { utilities: Utilitie
     const r = all.filter((x) => (!fromM || x.month >= fromM) && (!toM || x.month <= toM));
     return fromM || toM ? r : r.slice(0, 12);
   }, [all, fromM, toM]);
-  const sum = rows.reduce((a, r) => ({ electricity: a.electricity + r.electricity, water: a.water + r.water, gas: a.gas + r.gas, telecom: a.telecom + r.telecom, total: a.total + r.total }), {
+  const sum = rows.reduce((a, r) => ({ electricity: a.electricity + r.electricity, water: a.water + r.water, gas: a.gas + r.gas, telecom: a.telecom + r.telecom, mobile: a.mobile + r.mobile, total: a.total + r.total }), {
     electricity: 0,
     water: 0,
     gas: 0,
     telecom: 0,
+    mobile: 0,
     total: 0,
   });
   const avg = rows.length ? sum.total / rows.length : 0;
@@ -413,17 +414,17 @@ export function MonthlyCosts({ utilities, units, unitId }: { utilities: Utilitie
         <button
           disabled={!rows.length}
           onClick={() => printMonths(units, unit, rows)}
-          className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:opacity-40"
+          className="btn-print rounded-full px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
         >
           🖨 Print / PDF
         </button>
       </div>
       {rows.length > 0 && (
-        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {KINDS.map((k) => (
             <div key={k} className="chip-3d rounded-xl border border-white/5 bg-black/25 px-3 py-2">
               <div className="text-[10px] uppercase tracking-wider text-[var(--ink-3)]">
-                {ICON[k]} {k} · {rows.length} mo
+                {ICON[k]} {LABEL[k]} · {rows.length} mo
               </div>
               <div className="text-base font-semibold tabular-nums text-[var(--ink-1)]">{lkr(sum[k])}</div>
             </div>
@@ -435,21 +436,22 @@ export function MonthlyCosts({ utilities, units, unitId }: { utilities: Utilitie
         </div>
       )}
       <div className="overflow-x-auto rounded-xl border border-white/5">
-        <table className="w-full min-w-[620px] text-left text-sm">
+        <table className="w-full min-w-[700px] text-left text-sm">
           <thead className="bg-black/30 text-[11px] uppercase tracking-wider text-[var(--ink-3)]">
             <tr>
               <th className="px-3 py-2">Month</th>
               <th className="px-3 py-2 text-right">⚡ Electricity</th>
               <th className="px-3 py-2 text-right">💧 Water</th>
               <th className="px-3 py-2 text-right">🔥 Gas</th>
-              <th className="px-3 py-2 text-right">📶 Telecom</th>
+              <th className="px-3 py-2 text-right">📶 Home WiFi</th>
+              <th className="px-3 py-2 text-right">📱 Mobile</th>
               <th className="px-3 py-2 text-right">Total</th>
             </tr>
           </thead>
           <tbody className="tabular-nums">
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-6 text-center text-[var(--ink-3)]">
+                <td colSpan={7} className="px-3 py-6 text-center text-[var(--ink-3)]">
                   No costs yet. Add records with a cost (LKR).
                 </td>
               </tr>

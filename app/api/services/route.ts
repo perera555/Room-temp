@@ -7,7 +7,7 @@ import { UNITS } from "@/lib/units";
  * (older form {"on":true|false} still accepted)
  * Protected by the dashboard password (see proxy.ts) when one is set.
  */
-const KINDS = ["electricity", "water", "gas", "telecom"];
+const KINDS = ["electricity", "water", "gas", "telecom", "mobile"];
 const STATUSES = ["in_use", "on_request", "off"] as const;
 
 export async function POST(req: Request) {

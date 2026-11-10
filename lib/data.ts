@@ -18,7 +18,7 @@ import type {
   UtilityEntry,
 } from "./types";
 import { UNITS, airbnbRoomsFor, airbnbUnitIds, gasUnitIds, roomFrom, stripTags, unitIdFrom } from "./units";
-import { loadGasChanges, loadReadings, loadServiceOverrides, loadTelecomMap, loadUnitInfo, loadUtilityEntries, storeEnabled } from "./store";
+import { loadGasChanges, loadGasWeights, loadReadings, loadServiceOverrides, loadTelecomMap, loadUnitInfo, loadUtilityEntries, storeEnabled } from "./store";
 import { alertSettings } from "./alerts";
 
 const HOUR = 3_600_000;
@@ -543,14 +543,14 @@ async function liveBookings(spec: string): Promise<Booking[]> {
 /* ------------------------------------------------------------------ */
 /* LPG gas cylinder (12.5 kg)                                          */
 /* ------------------------------------------------------------------ */
-function gasFrom(unit: { id: string; name: string }, changes: number[], source: GasState["source"], canRecord: boolean): GasState {
+function gasFrom(unit: { id: string; name: string }, changes: number[], source: GasState["source"], canRecord: boolean, weighIns: GasState["weighIns"] = []): GasState {
   const sizeKg = Number(process.env.GAS_CYLINDER_KG ?? 12.5);
   const fallbackDays = Number(process.env.GAS_CYLINDER_DAYS ?? 90); // about 3 months per cylinder
   const gaps = changes.slice(1).map((t, i) => (t - changes[i]) / DAY).filter((d) => d >= 7 && d <= 365);
   const recent = gaps.slice(-5);
   const learned = recent.length > 0;
   const typicalDays = learned ? Math.round(recent.reduce((a, b) => a + b, 0) / recent.length) : fallbackDays;
-  return { unit: unit.id, unitName: unit.name, source, canRecord, sizeKg, changes, typicalDays, learned };
+  return { unit: unit.id, unitName: unit.name, source, canRecord, sizeKg, changes, typicalDays, learned, weighIns };
 }
 
 /** Units that use an LPG cylinder (GAS_UNITS, default Unit 1 only). */
@@ -585,8 +585,9 @@ async function getUnitInfo(): Promise<Record<string, UnitInfo>> {
           waterAccount: s.waterAccount ?? "",
           gasSupplier: s.gasSupplier || "Litro",
           telecomProvider: s.telecomProvider || "SLT-Mobitel",
-          telecomAccount: s.telecomAccount ?? "",
-          mobiles: Array.isArray(raw.mobiles) ? (raw.mobiles as UnitInfo["mobiles"]) : [],
+          telecomAccount: s.telecomAccount ?? (u.id === "unit1" ? "12345" : ""), // Unit 1 home WiFi line 12345
+          // saved numbers, or sample numbers until the database is connected
+          mobiles: Array.isArray(raw.mobiles) ? (raw.mobiles as UnitInfo["mobiles"]) : storeEnabled() ? [] : SAMPLE_MOBILES[u.id] ?? [],
           notes: s.notes ?? "",
         },
       ];
@@ -616,6 +617,7 @@ async function getServices(): Promise<Services> {
         water: overrides[u.id]?.water ?? "in_use",
         gas: overrides[u.id]?.gas ?? (gasIds.includes(u.id) ? "in_use" : "off"),
         telecom: overrides[u.id]?.telecom ?? "in_use",
+        mobile: overrides[u.id]?.mobile ?? "in_use",
       },
     ]),
   );
@@ -624,9 +626,11 @@ async function getServices(): Promise<Services> {
 async function getGas(now: number, services: Services): Promise<GasState[]> {
   const canRecord = storeEnabled();
   let stored: Record<string, number[]> = {};
+  let weights: Record<string, GasState["weighIns"]> = {};
   if (canRecord) {
     try {
       stored = await loadGasChanges(UNITS.map((u) => u.id));
+      weights = await loadGasWeights(UNITS.map((u) => u.id));
     } catch (err) {
       console.error("[dashboard] gas history failed:", err);
     }
@@ -640,14 +644,16 @@ async function getGas(now: number, services: Services): Promise<GasState[]> {
     return false;
   });
   return units.map((u, i) => {
-    if (stored[u.id]?.length) return gasFrom(u, stored[u.id], "live", true);
+    if (stored[u.id]?.length) return gasFrom(u, stored[u.id], "live", true, weights[u.id] ?? []);
     // e.g. GAS_LAST_CHANGED_UNIT2=2026-11-02 (or GAS_LAST_CHANGED for all)
     const raw = process.env[`GAS_LAST_CHANGED_${u.id.toUpperCase()}`] ?? process.env.GAS_LAST_CHANGED;
     const last = raw ? Date.parse(raw) : NaN;
     if (Number.isFinite(last)) return gasFrom(u, [last], "settings", canRecord);
     // sample history: cylinders lasting ~3 months, each unit at a different point
     const ago = [41, 55, 12, 30][i % 4]; // all comfortably above the "order soon" level
-    return gasFrom(u, [now - (ago + 181) * DAY, now - (ago + 90) * DAY, now - ago * DAY], "demo", canRecord);
+    // sample scale reading 3 days ago (cylinder TW 15.0 kg)
+    const sampleLeft = Math.max(1, Math.round(12.5 * (1 - (ago - 3) / 95) * 10) / 10);
+    return gasFrom(u, [now - (ago + 181) * DAY, now - (ago + 90) * DAY, now - ago * DAY], "demo", canRecord, [{ t: now - 3 * DAY, gross: Math.round((15 + sampleLeft) * 10) / 10, tare: 15 }]);
   });
 }
 
@@ -655,6 +661,18 @@ async function getGas(now: number, services: Services): Promise<GasState[]> {
 /* Utility records (electricity / water / gas) per unit                */
 /* ------------------------------------------------------------------ */
 const OWNER = (u: { owner: string | null; usage: string | null }) => u.owner ?? u.usage ?? "";
+
+/** Sample mobile / data SIMs per unit (shown only until the database is connected). */
+const SAMPLE_MOBILES: Record<string, UnitInfo["mobiles"]> = {
+  unit1: [{ number: "0771234567", provider: "Dialog", package: "Unlimited 1490", monthly: 1490 }],
+  unit2: [{ number: "0711234567", provider: "Mobitel", package: "Data 40GB", monthly: 990 }],
+  unit3: [
+    { number: "0751234567", provider: "Airtel", package: "Anytime 30GB", monthly: 1190 },
+    { number: "0702345678", provider: "Mobitel", package: "Guest Wi-Fi router 100GB", monthly: 2490 },
+  ],
+  unit4: [{ number: "0781234567", provider: "Hutch", package: "Unlimited 1290", monthly: 1290 }],
+  unit5: [{ number: "0761234567", provider: "Dialog", package: "Business 100GB", monthly: 2490 }],
+};
 function demoUtilities(now: number): UtilityEntry[] {
   const out: UtilityEntry[] = [];
   const first = new Date(now);
@@ -669,10 +687,61 @@ function demoUtilities(now: number): UtilityEntry[] {
       const kwh = Math.round((150 + hash(ui * 10 + m) * 90) * busy);
       out.push({ id: `demo-e-${u.id}-${m}`, unit: u.id, kind: "electricity", from: f, to: t, amount: kwh, cost: Math.round(kwh * 42 + 400), customer: OWNER(u), account: "", note: "Sample CEB bill" });
       const water = Math.round((12 + hash(ui * 20 + m) * 10) * (u.id === "unit5" ? 0.5 : 1));
-      const gb = Math.round(60 + hash(ui * 30 + m) * 90);
-      out.push({ id: `demo-t-${u.id}-${m}`, unit: u.id, kind: "telecom", from: f, to: t, amount: gb, cost: gb > 100 ? 4990 : 3490, customer: OWNER(u), account: "", note: "Sample SLT-Mobitel fibre" });
       out.push({ id: `demo-w-${u.id}-${m}`, unit: u.id, kind: "water", from: f, to: t, amount: water, cost: Math.round(water * 95 + 300), customer: OWNER(u), account: "", note: "Sample water bill" });
+
+      // sample personal mobile bills (calls + data) for this unit's numbers
+      for (const [mi, mb] of (SAMPLE_MOBILES[u.id] ?? []).entries()) {
+        const tax = Math.round((mb.monthly ?? 0) * 0.15);
+        const data = (mb.monthly ?? 0) - tax;
+        const calls = Math.round(hash(ui * 40 + m + mi) * 250);
+        out.push({
+          id: `demo-mb-${u.id}-${m}-${mi}`,
+          unit: u.id,
+          kind: "mobile",
+          from: f,
+          to: t,
+          month: t.slice(0, 7),
+          amount: Math.round(20 + hash(ui * 50 + m + mi) * 60),
+          cost: data + calls + tax,
+          charges: { data, calls, tax },
+          connection: mb.number,
+          customer: OWNER(u),
+          account: "",
+          note: `Sample ${mb.provider} · ${mb.package}`,
+        });
+      }
     });
+
+    // sample home WiFi / phone bill: Unit 1 line 12345, and D1, D2, D3 (D3 shared by Unit 3 + 4, split)
+    const lines = [
+      { code: "12345", units: ["unit1"], data: 2490, calls: 350 },
+      { code: "D1", units: ["unit2"], data: 3490, calls: 420 },
+      { code: "D2", units: ["unit3"], data: 2990, calls: 180 },
+      { code: "D3", units: ["unit3", "unit4"], data: 4990, calls: 260 },
+    ];
+    for (const ln of lines) {
+      const calls = Math.round(ln.calls * (0.7 + hash(m * 7 + ln.code.charCodeAt(1)) * 0.6));
+      const tax = Math.round((ln.data + calls) * 0.18);
+      const n = ln.units.length;
+      for (const unit of ln.units) {
+        const u = UNITS.find((x) => x.id === unit)!;
+        out.push({
+          id: `demo-t-${ln.code}-${unit}-${m}`,
+          unit,
+          kind: "telecom",
+          from: f,
+          to: t,
+          month: t.slice(0, 7),
+          amount: Math.round((90 + hash(m * 3 + n) * 80) / n),
+          cost: Math.round((ln.data + calls + tax) / n),
+          charges: { data: Math.round(ln.data / n), calls: Math.round(calls / n), tax: Math.round(tax / n) },
+          connection: ln.code,
+          customer: OWNER(u),
+          account: "",
+          note: `Sample SLT-Mobitel fibre · ${ln.code}${n > 1 ? ` · shared 1/${n}` : ""}`,
+        });
+      }
+    }
   }
   // Sample gas history for each gas unit, matching the sample cylinder changes (each cylinder ≈ 3 months)
   const isoAgo = (d: number) => new Date(now - d * DAY).toISOString().slice(0, 10);
@@ -741,8 +810,9 @@ export async function getDashboardData(): Promise<DashboardData> {
 
   const services = await getServices();
   const unitInfo = await getUnitInfo();
-  // telecom bill connections: D1 → Unit 2, D2 → Unit 3, D3 → Units 3 & 4 (shared) unless changed in the app
+  // home WiFi / phone lines: 12345 → Unit 1, D1 → Unit 2, D2 → Unit 3, D3 → Units 3 & 4 (shared) unless changed in the app
   let telecomMap: TelecomLink[] = [
+    { code: "12345", units: ["unit1"] },
     { code: "D1", units: ["unit2"] },
     { code: "D2", units: ["unit3"] },
     { code: "D3", units: ["unit3", "unit4"] },

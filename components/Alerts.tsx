@@ -245,7 +245,8 @@ export function AlertsPanel({ data }: { data: DashboardData }) {
           </span>
           <input
             type="checkbox"
-            className="h-5 w-5 accent-emerald-500"
+            role="switch"
+            className="switch"
             checked={voice}
             onChange={(e) => {
               setVoice(e.target.checked);
