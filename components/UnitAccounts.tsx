@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import type { UnitData, UnitInfo, UtilitiesState, UtilityKind } from "@/lib/types";
+import type { MobileLine, UnitData, UnitInfo, UtilitiesState, UtilityKind } from "@/lib/types";
 import { sendOrQueue } from "@/lib/outbox";
 
 const lkr = (n: number) => `LKR ${Math.round(n).toLocaleString()}`;
@@ -14,13 +14,15 @@ export const addressLine = (i?: UnitInfo) => [i?.address1, i?.address2, i?.city]
 /* Edit form: address + accounts for one unit                          */
 /* ------------------------------------------------------------------ */
 export function UnitInfoForm({ unit, info, onClose, onSaved }: { unit: UnitData; info: UnitInfo; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState<UnitInfo>({ ...info });
+  const [f, setF] = useState<UnitInfo>({ ...info, mobiles: info.mobiles ?? [] });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const set = (k: keyof UnitInfo, v: string) => setF((p) => ({ ...p, [k]: v }));
+  type TextKey = Exclude<keyof UnitInfo, "mobiles">;
+  const set = (k: TextKey, v: string) => setF((p) => ({ ...p, [k]: v }));
+  const setMobile = (i: number, patch: Partial<MobileLine>) => setF((p) => ({ ...p, mobiles: p.mobiles.map((m, j) => (j === i ? { ...m, ...patch } : m)) }));
   const input = "w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none ring-sky-500/50 focus:ring-2";
   const label = "mb-1 block text-[11px] font-medium uppercase tracking-wider text-[var(--ink-3)]";
-  const field = (k: keyof UnitInfo, l: string, ph = "", span2 = false) => (
+  const field = (k: TextKey, l: string, ph = "", span2 = false) => (
     <div className={span2 ? "col-span-2" : ""}>
       <label className={label} htmlFor={`ui-${k}`}>{l}</label>
       <input id={`ui-${k}`} className={input} value={f[k]} placeholder={ph} onChange={(e) => set(k, e.target.value)} />
@@ -103,6 +105,58 @@ export function UnitInfoForm({ unit, info, onClose, onSaved }: { unit: UnitData;
           {field("telecomAccount", "Account / phone no.", "e.g. 0112 345678")}
         </div>
 
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-xs font-semibold" style={{ color: "#c084fc" }}>📱 Mobile numbers &amp; data packages</span>
+          <button
+            type="button"
+            onClick={() => setF((p) => ({ ...p, mobiles: [...p.mobiles, { number: "", provider: "Dialog", package: "", monthly: null }] }))}
+            className="rounded-full border border-white/15 px-2.5 py-0.5 text-[11px] text-white hover:bg-white/10"
+          >
+            + Add number
+          </button>
+        </div>
+        <div className="mb-4 space-y-2">
+          {f.mobiles.length === 0 && <p className="text-xs text-[var(--ink-3)]">No mobile / data numbers yet.</p>}
+          {f.mobiles.map((m, i) => (
+            <div key={i} className="grid grid-cols-[1.2fr_1fr_1.4fr_0.9fr_auto] items-end gap-2">
+              <div>
+                <label className={label} htmlFor={`mb-num-${i}`}>Number</label>
+                <input id={`mb-num-${i}`} className={input} inputMode="tel" value={m.number} placeholder="077 123 4567" onChange={(e) => setMobile(i, { number: e.target.value })} />
+              </div>
+              <div>
+                <label className={label} htmlFor={`mb-prov-${i}`}>Network</label>
+                <select id={`mb-prov-${i}`} className={input} value={m.provider} onChange={(e) => setMobile(i, { provider: e.target.value })}>
+                  <option>Mobitel</option>
+                  <option>Dialog</option>
+                  <option>Hutch</option>
+                  <option>Airtel</option>
+                  <option>SLT</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              <div>
+                <label className={label} htmlFor={`mb-pkg-${i}`}>Data package</label>
+                <input id={`mb-pkg-${i}`} className={input} value={m.package} placeholder="e.g. Unlimited 1490" onChange={(e) => setMobile(i, { package: e.target.value })} />
+              </div>
+              <div>
+                <label className={label} htmlFor={`mb-lkr-${i}`}>LKR / month</label>
+                <input
+                  id={`mb-lkr-${i}`}
+                  className={input}
+                  type="number"
+                  min="0"
+                  inputMode="decimal"
+                  value={m.monthly ?? ""}
+                  onChange={(e) => setMobile(i, { monthly: e.target.value === "" ? null : Number(e.target.value) })}
+                />
+              </div>
+              <button type="button" onClick={() => setF((p) => ({ ...p, mobiles: p.mobiles.filter((_, j) => j !== i) }))} className="pb-2 text-[var(--ink-3)] hover:text-red-300" aria-label="Remove number">
+                🗑
+              </button>
+            </div>
+          ))}
+        </div>
+
         <div className="mb-1.5 text-xs font-semibold" style={{ color: "#fb923c" }}>🔥 Gas</div>
         <div className="mb-4 grid grid-cols-2 gap-3">
           <div>
@@ -147,6 +201,7 @@ export function UnitDetailsCard({ unit, info, onSaved, compact = false }: { unit
     gasSupplier: "Litro",
     telecomProvider: "SLT-Mobitel",
     telecomAccount: "",
+    mobiles: [],
     notes: "",
   };
   const addr = addressLine(i);
@@ -175,6 +230,13 @@ export function UnitDetailsCard({ unit, info, onSaved, compact = false }: { unit
         <div className="truncate">
           <span style={{ color: "#a78bfa" }}>📶 {i.telecomProvider}</span> <span className="tabular-nums text-[var(--ink-1)]">{i.telecomAccount || missing}</span>
         </div>
+        {(i.mobiles ?? []).map((m) => (
+          <div key={m.number} className="truncate">
+            <span style={{ color: "#c084fc" }}>📱 {m.provider}</span> <span className="tabular-nums text-[var(--ink-1)]">{m.number}</span>
+            {m.package && <span className="text-[var(--ink-3)]"> · {m.package}</span>}
+            {m.monthly != null && <span className="text-[var(--ink-3)]"> · {Math.round(m.monthly).toLocaleString()}/mo</span>}
+          </div>
+        ))}
         <div className="truncate">
           <span style={{ color: "#fb923c" }}>🔥 {i.gasSupplier}</span>
           {i.notes && <span className="text-[var(--ink-3)]"> · {i.notes}</span>}

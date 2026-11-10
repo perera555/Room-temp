@@ -561,7 +561,7 @@ const gasUnits = () => {
 
 /** Each unit's address and utility accounts (saved in the app; empty until filled in). */
 async function getUnitInfo(): Promise<Record<string, UnitInfo>> {
-  let saved: Record<string, Record<string, string>> = {};
+  let saved: Record<string, Record<string, unknown>> = {};
   if (storeEnabled()) {
     try {
       saved = await loadUnitInfo();
@@ -571,7 +571,8 @@ async function getUnitInfo(): Promise<Record<string, UnitInfo>> {
   }
   return Object.fromEntries(
     UNITS.map((u) => {
-      const s = saved[u.id] ?? {};
+      const raw = saved[u.id] ?? {};
+      const s = Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === "string")) as Record<string, string>;
       return [
         u.id,
         {
@@ -585,6 +586,7 @@ async function getUnitInfo(): Promise<Record<string, UnitInfo>> {
           gasSupplier: s.gasSupplier || "Litro",
           telecomProvider: s.telecomProvider || "SLT-Mobitel",
           telecomAccount: s.telecomAccount ?? "",
+          mobiles: Array.isArray(raw.mobiles) ? (raw.mobiles as UnitInfo["mobiles"]) : [],
           notes: s.notes ?? "",
         },
       ];

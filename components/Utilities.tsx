@@ -409,10 +409,32 @@ export function EnergyForm({
                         inputMode={key === "connection" ? "text" : "decimal"}
                         value={tc[key]}
                         placeholder={ph || "LKR"}
-                        onChange={(e) => setTc((p) => ({ ...p, [key]: e.target.value }))}
+                        list={key === "connection" ? "ef-tc-connections" : undefined}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setTc((p) => ({ ...p, [key]: v }));
+                          // picking a mobile number fills in its usual monthly package cost
+                          if (key === "connection") {
+                            const mb = (unitInfo[f.unit]?.mobiles ?? []).find((m) => m.number === v);
+                            if (mb?.monthly != null && cost.telecom === "") setTc((p) => ({ ...p, data: p.data || String(mb.monthly) }));
+                          }
+                        }}
                       />
                     </div>
                   ))}
+                  {/* suggestions: D1/D2/D3 connections and this unit's mobile numbers */}
+                  <datalist id="ef-tc-connections">
+                    {telecomMap.filter((t) => t.units.includes(f.unit)).map((t) => (
+                      <option key={t.code} value={t.code}>
+                        {t.units.length > 1 ? "shared" : "fixed line"}
+                      </option>
+                    ))}
+                    {(unitInfo[f.unit]?.mobiles ?? []).map((m) => (
+                      <option key={m.number} value={m.number}>
+                        {`${m.provider} ${m.package}`.trim()}
+                      </option>
+                    ))}
+                  </datalist>
                   {tcSum > 0 && cost.telecom === "" && (
                     <p className="col-span-5 -mt-1 text-[11px] text-violet-200">Cost = data + calls + tax + other = LKR {Math.round(tcSum).toLocaleString()}</p>
                   )}

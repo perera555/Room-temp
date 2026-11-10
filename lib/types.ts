@@ -110,6 +110,14 @@ export type UtilitiesState = {
   entries: UtilityEntry[]; // newest first
 };
 
+/** A mobile number or data SIM with its package. */
+export type MobileLine = {
+  number: string; // e.g. 0771234567
+  provider: string; // Mobitel / Dialog / Hutch / Airtel
+  package: string; // data package / plan name, e.g. "Unlimited 1490"
+  monthly: number | null; // usual monthly cost in LKR
+};
+
 /** Each unit's own address and utility accounts (editable in the app). */
 export type UnitInfo = {
   address1: string;
@@ -122,6 +130,8 @@ export type UnitInfo = {
   gasSupplier: string; // Litro / Laugfs
   telecomProvider: string; // SLT-Mobitel / Dialog / Hutch / Airtel
   telecomAccount: string;
+  /** Mobile numbers / data SIMs used in this unit (Mobitel, Dialog, Hutch, Airtel). */
+  mobiles: MobileLine[];
   notes: string;
 };
 

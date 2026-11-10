@@ -74,7 +74,7 @@ export async function deleteUtilityEntry(id: string) {
 /* ---------------- Unit addresses & utility accounts ---------------- */
 const UNIT_INFO_KEY = "rt:unitinfo";
 
-export async function loadUnitInfo(): Promise<Record<string, Record<string, string>>> {
+export async function loadUnitInfo(): Promise<Record<string, Record<string, unknown>>> {
   const [res] = await pipeline([["GET", UNIT_INFO_KEY]]);
   try {
     return res?.result ? JSON.parse(res.result as string) : {};
@@ -83,7 +83,7 @@ export async function loadUnitInfo(): Promise<Record<string, Record<string, stri
   }
 }
 
-export async function saveUnitInfo(unit: string, info: Record<string, string>) {
+export async function saveUnitInfo(unit: string, info: Record<string, unknown>) {
   const all = await loadUnitInfo();
   all[unit] = info;
   await pipeline([["SET", UNIT_INFO_KEY, JSON.stringify(all)]]);

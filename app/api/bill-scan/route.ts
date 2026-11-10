@@ -42,8 +42,9 @@ const BillSchema = z.object({
 export type ScannedBill = z.infer<typeof BillSchema>;
 
 const PROMPT = `This is a utility bill from Sri Lanka (amounts in LKR). Read it and fill in every field.
-- Bill types: electricity (CEB / LECO), water (NWSDB / council), telecom or internet/data (SLT-Mobitel, Dialog, Hutch, Airtel), gas (Litro / Laugfs receipt).
+- Bill types: electricity (CEB / LECO), water (NWSDB / council), telecom, internet, mobile or data package (SLT-Mobitel, Mobitel, Dialog, Hutch, Airtel), gas (Litro / Laugfs receipt).
 - Dates as YYYY-MM-DD. If only a month is shown, use its first and last day.
+- Mobile / data bills and reload or data-package receipts (Mobitel, Dialog, Hutch, Airtel) are "telecom": put the mobile number in "connection" and the package name in "description".
 - If the bill lists several connections (for example D1, D2, D3, or separate phone numbers), make one line per connection with its own data, call, tax and total. If the bill covers one connection, make a single line with connection "".
 - Put taxes and levies in "tax", calls/SMS in "call_charge", data/internet/rental in "data_charge", anything else in "other_charge".
 - Use numbers only (no commas or currency signs). Use 0 for anything not on the bill. Never guess a value you cannot read; mention it in confidence_notes instead.`;

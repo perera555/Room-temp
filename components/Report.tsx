@@ -153,7 +153,16 @@ export function Report() {
                 <td>{addressLine(i) || "—"}</td>
                 <td>{i?.elecAccount ? `${i.elecProvider} ${i.elecAccount}` : "—"}</td>
                 <td>{i?.waterAccount ? `${i.waterProvider} ${i.waterAccount}` : "—"}</td>
-                <td>{i?.telecomAccount ? `${i.telecomProvider} ${i.telecomAccount}` : "—"}</td>
+                <td>
+                  {i?.telecomAccount ? `${i.telecomProvider} ${i.telecomAccount}` : "—"}
+                  {(i?.mobiles ?? []).map((m) => (
+                    <div key={m.number}>
+                      📱 {m.provider} {m.number}
+                      {m.package ? ` · ${m.package}` : ""}
+                      {m.monthly != null ? ` · LKR ${Math.round(m.monthly).toLocaleString()}/mo` : ""}
+                    </div>
+                  ))}
+                </td>
                 <td>{i?.gasSupplier ?? "—"}</td>
               </tr>
             );

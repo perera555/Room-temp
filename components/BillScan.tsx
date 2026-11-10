@@ -113,6 +113,13 @@ function BillScanDialog({
     if (line.connection) {
       const m = telecomMap.find((t) => clean(t.code) === clean(line.connection));
       if (m) return m.units;
+      // a mobile number / data SIM listed in a unit's details (compare the last 9 digits: 077… = +9477…)
+      const tail = (s: string) => s.replace(/\D/g, "").slice(-9);
+      const conn = tail(line.connection);
+      if (conn.length === 9) {
+        const owners = units.filter((u) => (unitInfo[u.id]?.mobiles ?? []).some((mb) => tail(mb.number) === conn));
+        if (owners.length) return owners.map((u) => u.id);
+      }
     }
     const acc = clean(bill.account_number);
     if (acc) {

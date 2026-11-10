@@ -227,7 +227,9 @@ Content-Type: application/json
           <b>Each unit separately: address &amp; accounts.</b> On a unit’s page (or in the “Units · addresses &amp; utility accounts”
           list) press <b>✎ Edit</b> and enter address line 1, line 2 and city, the <b>⚡ electricity account</b> (CEB / LECO), the
           <b> 💧 water supply account</b> (NWSDB / council), the <b>📶 telecom / data account</b> (SLT-Mobitel, Dialog, Hutch, Airtel)
-          and the gas supplier. <b>+ Add record</b> then fills in the right account number automatically.
+          , the gas supplier, and every <b>📱 mobile number / data SIM</b> (Mobitel, Dialog, Hutch, Airtel) with its data package and
+          monthly cost. <b>+ Add record</b> then fills in the right account number automatically, and mobile bills go to the right unit
+          by phone number.
         </p>
         <p>
           <b>📶 Telecom / data bills</b> work exactly like electricity and water: From → To, data used (GB), cost in LKR.
@@ -285,7 +287,8 @@ Content-Type: application/json
             topic name you invent, e.g. <code>roomtemp-perera-7731</code>. In Vercel add <code>NTFY_TOPIC</code> = that name.
           </li>
           <li>
-            <b>WhatsApp (free via CallMeBot):</b> save <b>+34 644 51 95 23</b> in your phone, send it the WhatsApp message
+            <b>WhatsApp (free via CallMeBot):</b> open <b>callmebot.com</b> → WhatsApp API and save the number shown there (it can
+            change) in your phone, send it the WhatsApp message
             <code>I allow callmebot to send me messages</code>. You get an API key back. In Vercel add
             <code>CALLMEBOT_WHATSAPP</code> = <code>+9477xxxxxxx:APIKEY</code> (several numbers: separate with commas).
           </li>
